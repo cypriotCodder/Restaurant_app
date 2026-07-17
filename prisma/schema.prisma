@@ -1,0 +1,222 @@
+// Multi-tenant QR table-ordering platform.
+// SQLite for dev; schema is Postgres-compatible (swap provider + DATABASE_URL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Venue {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  name          String
+  currency      String   @default("TRY")
+  defaultLocale String   @default("tr")
+  // Secret used to HMAC-sign table QR payloads. Rotating a table's qrVersion
+  // (not this secret) is the per-table revocation mechanism.
+  qrSecret      String
+  // Which PosAdapter delivers accepted orders: "console" | "escpos_bridge"
+  posAdapter    String   @default("console")
+  createdAt     DateTime @default(now())
+
+  tables     Table[]
+  categories Category[]
+  items      MenuItem[]
+  staff      StaffUser[]
+  sessions   TableSession[]
+  orders     Order[]
+  attempts   OrderAttempt[]
+  deliveries PosDelivery[]
+  bridgeKeys BridgeKey[]
+}
+
+model Table {
+  id        String   @id @default(cuid())
+  venueId   String
+  venue     Venue    @relation(fields: [venueId], references: [id])
+  // Globally-unique short code embedded in the QR URL.
+  code      String   @unique
+  name      String
+  // Bumped on QR regeneration; old signed URLs become invalid.
+  qrVersion Int      @default(1)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sessions TableSession[]
+  orders   Order[]
+}
+
+model StaffUser {
+  id           String   @id @default(cuid())
+  venueId      String
+  venue        Venue    @relation(fields: [venueId], references: [id])
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String // "admin" | "desk"
+  createdAt    DateTime @default(now())
+}
+
+model Category {
+  id        String  @id @default(cuid())
+  venueId   String
+  venue     Venue   @relation(fields: [venueId], references: [id])
+  nameTr    String
+  nameEn    String
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  items MenuItem[]
+}
+
+model MenuItem {
+  id         String  @id @default(cuid())
+  venueId    String
+  venue      Venue   @relation(fields: [venueId], references: [id])
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+  nameTr     String
+  nameEn     String
+  descTr     String  @default("")
+  descEn     String  @default("")
+  priceKurus Int
+  photoUrl   String?
+  // Comma-separated tags: "vegan,gluten,nuts" etc.
+  tags       String  @default("")
+  available  Boolean @default(true) // the 86 toggle
+  sortOrder  Int     @default(0)
+
+  modifierGroups ModifierGroup[]
+  orderItems     OrderItem[]
+}
+
+model ModifierGroup {
+  id        String   @id @default(cuid())
+  itemId    String
+  item      MenuItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  nameTr    String
+  nameEn    String
+  minSelect Int      @default(0)
+  maxSelect Int      @default(1)
+  sortOrder Int      @default(0)
+
+  options ModifierOption[]
+}
+
+model ModifierOption {
+  id              String        @id @default(cuid())
+  groupId         String
+  group           ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  nameTr          String
+  nameEn          String
+  priceDeltaKurus Int           @default(0)
+  sortOrder       Int           @default(0)
+}
+
+model TableSession {
+  id         String    @id @default(cuid())
+  venueId    String
+  venue      Venue     @relation(fields: [venueId], references: [id])
+  tableId    String
+  table      Table     @relation(fields: [tableId], references: [id])
+  token      String    @unique
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  // Hard cap; sliding inactivity window is enforced in code against lastSeenAt.
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  orders Order[]
+}
+
+model Order {
+  id            String   @id @default(cuid())
+  venueId       String
+  venue         Venue    @relation(fields: [venueId], references: [id])
+  tableId       String
+  table         Table    @relation(fields: [tableId], references: [id])
+  sessionId     String
+  session       TableSession @relation(fields: [sessionId], references: [id])
+  number        Int // per-venue sequential ticket number
+  status        String   @default("received") // received|accepted|preparing|ready|served|rejected
+  rejectReason  String?
+  totalKurus    Int
+  // PSP-ready fields; unused at pay-at-till but stable schema for later.
+  paymentStatus   String  @default("unpaid") // unpaid|pending|paid|refunded
+  paymentProvider String?
+  paymentRef      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  items      OrderItem[]
+  deliveries PosDelivery[]
+
+  @@index([venueId, status])
+}
+
+model OrderItem {
+  id             String    @id @default(cuid())
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId         String?
+  item           MenuItem? @relation(fields: [itemId], references: [id])
+  // Snapshots so later menu edits never rewrite order history.
+  nameSnapshot   String
+  unitPriceKurus Int
+  qty            Int
+  note           String    @default("")
+  // JSON array of { name, priceDeltaKurus } snapshots.
+  modifiersJson  String    @default("[]")
+}
+
+// Every order *attempt*, including ones rejected before an Order exists
+// (expired session, invalid QR signature, rate limit) — the abuse-analysis ledger.
+model OrderAttempt {
+  id        String   @id @default(cuid())
+  venueId   String?
+  venue     Venue?   @relation(fields: [venueId], references: [id])
+  tableId   String?
+  sessionId String?
+  orderId   String?
+  ip        String   @default("")
+  userAgent String   @default("")
+  outcome   String // ok|invalid_qr|expired_session|revoked_session|rate_limited|table_inactive|validation_error
+  detail    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([venueId, createdAt])
+}
+
+// Outbox for the swappable POS adapter layer. The customer→desk flow never
+// depends on rows here succeeding.
+model PosDelivery {
+  id        String   @id @default(cuid())
+  venueId   String
+  venue     Venue    @relation(fields: [venueId], references: [id])
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  adapter   String
+  status    String   @default("pending") // pending|claimed|sent|failed
+  attempts  Int      @default(0)
+  lastError String?
+  // Pre-rendered ticket payload (base64 ESC/POS bytes or plain text).
+  payload   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([venueId, status])
+}
+
+// API keys for on-prem bridge agents pulling the outbox.
+model BridgeKey {
+  id        String   @id @default(cuid())
+  venueId   String
+  venue     Venue    @relation(fields: [venueId], references: [id])
+  key       String   @unique
+  label     String   @default("kitchen-bridge")
+  createdAt DateTime @default(now())
+}
