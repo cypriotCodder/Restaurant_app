@@ -38,7 +38,9 @@ export default function DeskBoard({ staffName }: { staffName: string }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [, forceTick] = useState(0);
+  // The clock the elapsed-time badges read from. Held in state and advanced by
+  // the 30s interval below so cards never call Date.now() during render.
+  const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/desk/orders${showAll ? "?all=1" : ""}`);
@@ -47,7 +49,9 @@ export default function DeskBoard({ staffName }: { staffName: string }) {
   }, [showAll]);
 
   useEffect(() => {
-    load();
+    // Wrapped so the state update lands after the await rather than
+    // synchronously inside the effect body.
+    (async () => { await load(); })();
   }, [load]);
 
   // SSE push + elapsed-time repaint every 30s + 60s polling safety net.
@@ -61,7 +65,7 @@ export default function DeskBoard({ staffName }: { staffName: string }) {
         if (msg.type === "order.created" || msg.type === "order.updated") load();
       } catch {}
     };
-    const tick = setInterval(() => forceTick((n) => n + 1), 30000);
+    const tick = setInterval(() => setNow(Date.now()), 30000);
     const poll = setInterval(load, 60000);
     return () => {
       es.close();
@@ -113,7 +117,7 @@ export default function DeskBoard({ staffName }: { staffName: string }) {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {(showAll ? [...active, ...done] : active).map((o) => (
-          <OrderCard key={o.id} order={o} onTransition={transition} onReject={(id) => { setRejecting(id); setReason(""); setCustomReason(""); }} />
+          <OrderCard key={o.id} order={o} now={now} onTransition={transition} onReject={(id) => { setRejecting(id); setReason(""); setCustomReason(""); }} />
         ))}
       </div>
 
@@ -168,14 +172,16 @@ export default function DeskBoard({ staffName }: { staffName: string }) {
 
 function OrderCard({
   order: o,
+  now,
   onTransition,
   onReject,
 }: {
   order: DeskOrder;
+  now: number;
   onTransition: (id: string, status: string) => void;
   onReject: (id: string) => void;
 }) {
-  const ageMin = Math.floor((Date.now() - new Date(o.createdAt).getTime()) / 60000);
+  const ageMin = Math.floor((now - new Date(o.createdAt).getTime()) / 60000);
   const urgent = ageMin >= 10 && ["received", "accepted", "preparing"].includes(o.status);
   const cfg = statusConfig[o.status] ?? { icon: "?", label: o.status, cls: "tag-neutral" };
 

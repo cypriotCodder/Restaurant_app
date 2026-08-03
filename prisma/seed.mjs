@@ -5,30 +5,45 @@ import { randomBytes } from "crypto";
 const db = new PrismaClient();
 const code = () => randomBytes(6).toString("base64url");
 
+// Staff credentials come from the environment so a real deployment is never
+// seeded with a password published in the README. Anything unset gets a fresh
+// random password, printed once below — capture it then, it is not recoverable.
+const generated = [];
+function password(envVar) {
+  const fromEnv = process.env[envVar];
+  if (fromEnv) return fromEnv;
+  const secret = randomBytes(12).toString("base64url");
+  generated.push([envVar, secret]);
+  return secret;
+}
+
 async function main() {
   if (await db.venue.findFirst()) {
     console.log("Seed skipped: venue already exists.");
     return;
   }
-  const hash = await bcrypt.hash("demo1234", 10);
+  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@theheaven.local";
+  const deskEmail = process.env.SEED_DESK_EMAIL ?? "desk@theheaven.local";
+  const adminHash = await bcrypt.hash(password("SEED_ADMIN_PASSWORD"), 10);
+  const deskHash = await bcrypt.hash(password("SEED_DESK_PASSWORD"), 10);
 
   const venue = await db.venue.create({
     data: {
-      slug: "the-heaven",
-      name: "The Heaven Restaurant & Cafe",
+      slug: process.env.SEED_VENUE_SLUG ?? "the-heaven",
+      name: process.env.SEED_VENUE_NAME ?? "The Heaven Restaurant & Cafe",
       qrSecret: randomBytes(24).toString("base64url"),
       posAdapter: "escpos_bridge",
       staff: {
         create: [
-          { email: "admin@demo.local", name: "Yönetici", passwordHash: hash, role: "admin" },
-          { email: "desk@demo.local", name: "Mutfak", passwordHash: hash, role: "desk" },
+          { email: adminEmail, name: "Yönetici", passwordHash: adminHash, role: "admin" },
+          { email: deskEmail, name: "Mutfak", passwordHash: deskHash, role: "desk" },
         ],
       },
       tables: {
         create: Array.from({ length: 8 }, (_, i) => ({ name: `Masa ${i + 1}`, code: code() })),
       },
       bridgeKeys: {
-        create: { key: "bridge-demo-" + randomBytes(12).toString("hex"), label: "kitchen-bridge" },
+        create: { key: "bridge-" + randomBytes(16).toString("hex"), label: "kitchen-bridge" },
       },
     },
   });
@@ -112,9 +127,15 @@ async function main() {
 
   const bridgeKey = await db.bridgeKey.findFirst({ where: { venueId: venue.id } });
   console.log(`Seeded ${venue.name}.`);
-  console.log("  admin@demo.local / demo1234 (admin)");
-  console.log("  desk@demo.local  / demo1234 (desk)");
+  console.log("  admin:", adminEmail);
+  console.log("  desk: ", deskEmail);
   console.log("  bridge key:", bridgeKey.key);
+  if (generated.length) {
+    console.log("\n  Generated passwords — copy these now, they are not stored anywhere:");
+    for (const [envVar, secret] of generated) {
+      console.log(`    ${envVar}=${secret}`);
+    }
+  }
 }
 
 main().finally(() => db.$disconnect());

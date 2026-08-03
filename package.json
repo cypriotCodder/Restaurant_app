@@ -4,14 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma migrate deploy && next build",
     "start": "next start",
     "lint": "eslint",
-    "seed": "node prisma/seed.mjs"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "postinstall": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "seed": "node --env-file-if-exists=.env.local prisma/seed.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@vercel/blob": "^2.6.1",
     "bcryptjs": "^3.0.3",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.3",
     "next": "16.2.10",
     "prisma": "^6.19.3",
@@ -30,9 +37,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
-    "typescript": "^5"
-  },
-  "prisma": {
-    "seed": "node prisma/seed.mjs"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

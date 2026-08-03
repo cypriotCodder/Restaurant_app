@@ -118,7 +118,7 @@ function MenuTab() {
     const res = await fetch("/api/admin/categories");
     if (res.ok) setCategories((await res.json()).categories);
   }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { (async () => { await load(); })(); }, [load]);
 
   async function addCategory() {
     if (!newCat.trim()) return;
@@ -486,7 +486,7 @@ function TablesTab() {
     if (res.ok) setTables((await res.json()).tables);
   }, []);
   useEffect(() => {
-    load();
+    (async () => { await load(); })();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, [load]);

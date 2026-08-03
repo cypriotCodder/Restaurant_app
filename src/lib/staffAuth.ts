@@ -1,9 +1,12 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { db } from "./db";
+import { getEnv } from "./env";
 
 const COOKIE = "staff_session";
-const secret = () => new TextEncoder().encode(process.env.AUTH_SECRET ?? "dev-secret");
+// No fallback by design: an unset AUTH_SECRET must break signing loudly rather
+// than silently sign every staff token with a value an attacker can guess.
+const secret = () => new TextEncoder().encode(getEnv().AUTH_SECRET);
 
 export type StaffClaims = {
   sub: string; // StaffUser.id

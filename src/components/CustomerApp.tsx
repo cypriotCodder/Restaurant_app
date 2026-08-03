@@ -86,16 +86,27 @@ export default function CustomerApp({ code }: { code: string }) {
     if (res.ok) setOrders((await res.json()).orders);
   }, []);
 
+  // Restore the cart that survived a re-scan. This has to stay a synchronous
+  // post-mount effect: localStorage does not exist during SSR, so hydrating it
+  // in a useState initializer would make the server and client first renders
+  // disagree. set-state-in-effect guards against cascading renders, which a
+  // one-shot mount hydration cannot cause.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     try {
       const saved = localStorage.getItem(cartKey);
       if (saved) setCart(JSON.parse(saved));
       const savedLocale = localStorage.getItem("locale");
       if (savedLocale === "en" || savedLocale === "tr") setLocale(savedLocale);
     } catch {}
-    loadMenu();
-    loadOrders();
-  }, [cartKey, loadMenu, loadOrders]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [cartKey]);
+
+  useEffect(() => {
+    (async () => {
+      await Promise.all([loadMenu(), loadOrders()]);
+    })();
+  }, [loadMenu, loadOrders]);
 
   useEffect(() => {
     try {

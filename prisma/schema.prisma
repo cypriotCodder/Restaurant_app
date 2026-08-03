@@ -1,13 +1,18 @@
 // Multi-tenant QR table-ordering platform.
-// SQLite for dev; schema is Postgres-compatible (swap provider + DATABASE_URL).
+// Neon Postgres (Vercel Marketplace). `url` is the pooled connection used by
+// the app at runtime; `directUrl` is the unpooled one Prisma needs for
+// migrations, which cannot run through PgBouncer. Both are supplied by the
+// Neon integration — DATABASE_URL_UNPOOLED is Neon's own name for the direct
+// endpoint, so it survives `vercel env pull`.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 model Venue {

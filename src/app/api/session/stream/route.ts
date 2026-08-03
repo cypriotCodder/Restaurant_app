@@ -3,6 +3,9 @@ import { sseResponse } from "@/lib/sse";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+// Hold the stream for the platform maximum; EventSource reconnects by itself
+// when the function is torn down at the cap.
+export const maxDuration = 300;
 
 // Customer live channel: status changes for this table's orders + menu
 // availability changes (86'd items disappear mid-browse).

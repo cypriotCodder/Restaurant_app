@@ -42,7 +42,7 @@ export default async function Home() {
             </Link>
           </div>
           <p className="text-xs mt-4 pt-3" style={{ color: "var(--color-neutral-900)", borderTop: "1px solid var(--color-divider)" }}>
-            Demo: admin@demo.local / demo1234 · desk@demo.local / demo1234
+            Staff credentials are issued at seed time — see the seed output.
           </p>
         </div>
 

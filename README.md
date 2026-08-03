@@ -6,12 +6,19 @@ Customers scan a QR at their table, browse the menu on their phone (no app, no a
 
 ```bash
 npm install
-npx prisma db push      # creates prisma/dev.db
-npm run seed            # Demo Kafe: menu, 8 tables, staff users, bridge key
-npm run dev             # http://localhost:3000
+vercel env pull .env.local   # Neon + Upstash + Blob credentials
+npm run migrate:deploy       # apply migrations to Postgres
+npm run seed                 # venue: menu, 8 tables, staff users, bridge key
+npm run dev                  # http://localhost:3000
 ```
 
-Demo logins: `admin@demo.local` / `demo1234` (admin) · `desk@demo.local` / `demo1234` (desk).
+`.env.local` is the source of truth for service credentials and is gitignored; `prisma.config.ts`
+loads it so the Prisma CLI targets the same database the app does.
+
+The seed takes staff credentials from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` /
+`SEED_DESK_EMAIL` / `SEED_DESK_PASSWORD`. Any password left unset is generated and printed **once** —
+capture it then, it is not stored anywhere. There are no default passwords.
+
 The landing page lists per-table "scan" links that are byte-identical to what each printed QR encodes.
 
 ## Surfaces
@@ -50,6 +57,16 @@ The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP 
 
 ## Stack & notes
 
-Next.js App Router (TS) · Prisma 6 + SQLite (Postgres-compatible schema — swap `DATABASE_URL`/provider for hosted prod) · SSE for realtime (in-process bus; swap for Redis pub/sub when multi-instance) · Tailwind. Multi-tenant: all data is venue-scoped. Money is stored as kuruş integers. Orders snapshot item names/prices. Payment is pay-at-till; `paymentStatus/Provider/Ref` fields are already on `Order` for a later PSP (iyzico/PayTR) integration.
+Next.js App Router (TS) · Prisma 6 + **Neon Postgres** (pooled `DATABASE_URL` at runtime, unpooled `DATABASE_URL_UNPOOLED` for migrations) · SSE for realtime over **Upstash Redis pub/sub**, so events reach every serverless instance rather than only the one that served the write · menu photos on **Vercel Blob** · Tailwind. Multi-tenant: all data is venue-scoped. Money is stored as kuruş integers. Orders snapshot item names/prices. Payment is pay-at-till; `paymentStatus/Provider/Ref` fields are already on `Order` for a later PSP (iyzico/PayTR) integration.
 
-Set a real `AUTH_SECRET` and `NEXT_PUBLIC_BASE_URL` (the printed QR domain) in production.
+`src/lib/env.ts` validates the environment at boot (via `instrumentation.ts`). There are no fallbacks:
+a deployment missing `AUTH_SECRET`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `REDIS_URL`,
+`BLOB_READ_WRITE_TOKEN` or `NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured.
+`REDIS_URL` must be the `rediss://` endpoint — the Upstash REST API cannot `SUBSCRIBE`.
+
+## Release gate: NEXT_PUBLIC_BASE_URL
+
+**Set `NEXT_PUBLIC_BASE_URL` to the final production domain before printing a single QR code.**
+Every physical table QR encodes `{NEXT_PUBLIC_BASE_URL}/scan/{code}?k={sig}`. If the domain changes
+afterwards, every printed code in the venue stops working and all table cards must be reprinted.
+Changing `AUTH_SECRET` is safe by comparison — it only signs out staff.

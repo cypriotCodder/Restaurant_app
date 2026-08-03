@@ -2,6 +2,9 @@ import { requireStaff } from "@/lib/staffAuth";
 import { sseResponse } from "@/lib/sse";
 
 export const dynamic = "force-dynamic";
+// Hold the stream for the platform maximum; EventSource reconnects by itself
+// when the function is torn down at the cap.
+export const maxDuration = 300;
 
 // Desk live channel: any order event in this venue triggers a refetch hint.
 export async function GET() {

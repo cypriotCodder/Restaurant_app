@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "fs/promises";
 import { randomBytes } from "crypto";
-import path from "path";
+import { put } from "@vercel/blob";
 import { requireStaff } from "@/lib/staffAuth";
 
-// Menu photo upload → public/uploads. Swap for Blob/S3 storage in hosted prod.
+// Menu photo upload → Vercel Blob. Previously written to public/uploads, which
+// does not survive on serverless: the filesystem is per-invocation, so an
+// uploaded photo vanished on the next deploy (or simply the next request).
 export async function POST(req: NextRequest) {
   const staff = await requireStaff("admin");
   if (!staff) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -15,9 +16,14 @@ export async function POST(req: NextRequest) {
   const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" }[file.type];
   if (!ext) return NextResponse.json({ error: "bad_type" }, { status: 415 });
 
-  const name = randomBytes(8).toString("hex") + ext;
-  const dir = path.join(process.cwd(), "public", "uploads");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
-  return NextResponse.json({ ok: true, url: `/uploads/${name}` });
+  // Namespaced per venue so one tenant's uploads can never collide with or
+  // overwrite another's.
+  const key = `menu/${staff.venueId}/${randomBytes(8).toString("hex")}${ext}`;
+  try {
+    const blob = await put(key, file, { access: "public", contentType: file.type });
+    return NextResponse.json({ ok: true, url: blob.url });
+  } catch (err) {
+    console.error("blob upload failed:", err);
+    return NextResponse.json({ error: "upload_failed" }, { status: 502 });
+  }
 }
