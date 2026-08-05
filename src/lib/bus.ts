@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import Redis from "ioredis";
+import { waitUntil } from "@vercel/functions";
 
 // Cross-instance pub/sub feeding the SSE endpoints.
 //
@@ -68,12 +69,21 @@ export function publish(event: BusEvent) {
     emitter.emit("event", event);
     return;
   }
-  // Deliberately not awaited — every caller is a route handler that treats
-  // this as fire-and-forget, and the ordering guarantee they rely on is
-  // "the DB write already committed", not "the event was delivered".
-  publisher()
+  // Not awaited, so callers keep their fire-and-forget signature — but the
+  // promise is handed to waitUntil, because otherwise the platform is free to
+  // freeze the instance the moment the route returns its response. That kills
+  // the in-flight PUBLISH (which on a cold instance still has a TLS handshake
+  // to finish) and the event is silently lost. Outside Vercel waitUntil is a
+  // no-op wrapper, so local and test runs are unaffected.
+  const sent = publisher()
     .publish(CHANNEL, JSON.stringify(event))
     .catch((err) => console.error("bus publish:", err.message));
+  try {
+    waitUntil(sent);
+  } catch {
+    // No request context (scripts, tests) — the promise still settles there
+    // because nothing is freezing the process.
+  }
 }
 
 export function subscribe(handler: (event: BusEvent) => void): () => void {
