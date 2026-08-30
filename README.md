@@ -15,9 +15,15 @@ npm run dev                  # http://localhost:3000
 `.env.local` is the source of truth for service credentials and is gitignored; `prisma.config.ts`
 loads it so the Prisma CLI targets the same database the app does.
 
-The seed takes staff credentials from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` /
-`SEED_DESK_EMAIL` / `SEED_DESK_PASSWORD`. Any password left unset is generated and printed **once** —
-capture it then, it is not stored anywhere. There are no default passwords.
+### Staff / Admin Credentials
+
+The database seed creates two staff accounts by default:
+- **Admin Account (`/admin`):** Email `admin@theheaven.local` (overridden via `SEED_ADMIN_EMAIL`)
+- **Desk/Kitchen Account (`/desk`):** Email `desk@theheaven.local` (overridden via `SEED_DESK_EMAIL`)
+
+**Passwords:**
+- You can define custom passwords in `.env.local` using `SEED_ADMIN_PASSWORD` and `SEED_DESK_PASSWORD`.
+- If unset in `.env.local`, the seed script (`npm run seed`) generates random 12-character passwords and prints them **once** in the terminal logs. Capture them then, as they are hashed in the database and not stored in plain text anywhere.
 
 The landing page lists per-table "scan" links that are byte-identical to what each printed QR encodes.
 
