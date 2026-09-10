@@ -67,7 +67,7 @@ Next.js App Router (TS) · Prisma 6 + **Neon Postgres** (pooled `DATABASE_URL` a
 
 `src/lib/env.ts` validates the environment at boot (via `instrumentation.ts`). There are no fallbacks:
 a deployment missing `AUTH_SECRET`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `REDIS_URL`,
-`BLOB_READ_WRITE_TOKEN` or `NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured.
+`BLOB_READ_WRITE_TOKEN`, `CRON_SECRET` or `NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured.
 `REDIS_URL` must be the `rediss://` endpoint — the Upstash REST API cannot `SUBSCRIBE`.
 
 ## Release gate: NEXT_PUBLIC_BASE_URL

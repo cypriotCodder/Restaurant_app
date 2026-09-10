@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireStaff } from "@/lib/staffAuth";
 import { publish } from "@/lib/bus";
-import { enqueuePosDelivery } from "@/lib/pos/outbox";
+import { enqueuePosDeliveryInBackground } from "@/lib/pos/outbox";
 
 const transitions: Record<string, string[]> = {
   received: ["accepted", "rejected"],
@@ -35,9 +35,17 @@ export async function PATCH(
   });
 
   // Acceptance is the POS handoff point: ticket goes to the outbox →
-  // AKINSOFT bridge (print). Failure there never blocks this response.
-  if (status === "accepted") void enqueuePosDelivery(id);
+  // AKINSOFT bridge (print). Failure there never blocks this response, but the
+  // work is registered with waitUntil so the platform cannot freeze the
+  // instance out from under the enqueue the moment we return.
+  if (status === "accepted") enqueuePosDeliveryInBackground(id);
 
-  publish({ type: "order.updated", venueId: staff.venueId, orderId: id, sessionId: updated.sessionId });
+  publish({
+    type: "order.updated",
+    venueId: staff.venueId,
+    orderId: id,
+    sessionId: updated.sessionId,
+    tableId: updated.tableId,
+  });
   return NextResponse.json({ ok: true, status: updated.status });
 }

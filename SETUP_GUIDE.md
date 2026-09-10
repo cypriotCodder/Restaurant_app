@@ -33,6 +33,11 @@ REDIS_URL="rediss://default:token@your-redis-host.upstash.io:6379"
 # Vercel Blob read/write token for menu images
 BLOB_READ_WRITE_TOKEN="vercel_blob_rw_..."
 
+# Authenticates the Vercel Cron call to /api/cron/pos-sweep, which recovers
+# kitchen tickets stranded by a crashed bridge agent. Vercel sets this
+# automatically for projects with a cron schedule; set it yourself for local runs.
+CRON_SECRET="generate-with-openssl-rand-base64-32"
+
 # Application Origin Base URL
 NEXT_PUBLIC_BASE_URL="http://localhost:3000"
 

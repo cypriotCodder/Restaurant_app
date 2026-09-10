@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { MAX_ATTEMPTS } from "@/lib/pos/outbox";
 
 export async function POST(req: NextRequest) {
   const key = req.headers.get("x-bridge-key");
@@ -12,13 +13,23 @@ export async function POST(req: NextRequest) {
   });
   if (!delivery) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
+  // A late ack for a claim that has already been swept back to pending (and
+  // possibly re-served to another agent) must not resurrect it. Only a row
+  // still sitting in the claim we handed out is settled here.
+  if (delivery.status !== "claimed") {
+    return NextResponse.json({ ok: true, ignored: "claim_no_longer_held" });
+  }
+
+  // attempts was already incremented when the row was claimed, so the ack only
+  // records the outcome.
   await db.posDelivery.update({
     where: { id: delivery.id },
     data: ok
-      ? { status: "sent", attempts: { increment: 1 } }
+      ? { status: "sent", claimedAt: null, claimId: null, lastError: null }
       : {
-          status: delivery.attempts + 1 >= 5 ? "failed" : "pending",
-          attempts: { increment: 1 },
+          status: delivery.attempts >= MAX_ATTEMPTS ? "failed" : "pending",
+          claimedAt: null,
+          claimId: null,
           lastError: String(error ?? "unknown").slice(0, 500),
         },
   });

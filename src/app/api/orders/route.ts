@@ -17,6 +17,9 @@ const orderSchema = z.object({
     )
     .min(1)
     .max(30),
+  // Optional so an older cached client keeps working; when present it makes
+  // the submission replay-safe.
+  idempotencyKey: z.string().min(8).max(64).optional(),
 });
 
 // Rate limits (per anti-abuse design)
@@ -37,6 +40,20 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     await logAttempt(req, "validation_error", { ...base, detail: parsed.error?.message.slice(0, 300) ?? "bad json" });
     return NextResponse.json({ error: "invalid_order" }, { status: 400 });
+  }
+
+  // Replay check: a double-tap (or a retry after a timeout the customer never
+  // saw succeed) reuses the same key, and the already-created order is returned
+  // as if this were the original request.
+  const idempotencyKey = parsed.data.idempotencyKey;
+  if (idempotencyKey) {
+    const existing = await db.order.findFirst({
+      where: { sessionId: session.id, idempotencyKey },
+      select: { id: true, number: true },
+    });
+    if (existing) {
+      return NextResponse.json({ ok: true, orderId: existing.id, number: existing.number, replayed: true });
+    }
   }
 
   const recent = await db.order.count({
@@ -103,27 +120,111 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const order = await db.$transaction(async (tx) => {
-    const last = await tx.order.findFirst({
-      where: { venueId: session.venueId },
-      orderBy: { number: "desc" },
-      select: { number: true },
-    });
-    return tx.order.create({
-      data: {
-        venueId: session.venueId,
-        tableId: session.tableId,
-        sessionId: session.id,
-        number: (last?.number ?? 0) + 1,
-        totalKurus,
-        items: { create: orderItems },
-      },
-    });
+  const order = await createOrderWithNextNumber({
+    venueId: session.venueId,
+    tableId: session.tableId,
+    sessionId: session.id,
+    totalKurus,
+    idempotencyKey,
+    items: orderItems,
   });
+  if (!order) {
+    await logAttempt(req, "number_conflict", { ...base, detail: "exhausted ticket-number retries" });
+    return NextResponse.json({ error: "order_failed" }, { status: 503 });
+  }
 
   await logAttempt(req, "ok", { ...base, orderId: order.id });
-  publish({ type: "order.created", venueId: session.venueId, orderId: order.id, sessionId: session.id });
+  publish({
+    type: "order.created",
+    venueId: session.venueId,
+    orderId: order.id,
+    sessionId: session.id,
+    tableId: session.tableId,
+  });
   return NextResponse.json({ ok: true, orderId: order.id, number: order.number });
+}
+
+// The per-venue ticket number is max(number)+1, and Prisma's interactive
+// transactions run at READ COMMITTED — two concurrent orders in the same venue
+// read the same max and both try to claim it. The DB now rejects that with a
+// unique-constraint violation (P2002 on Order_venueId_number_key), so the
+// collision is caught here and retried against a freshly-read max instead of
+// silently sending two identical ticket numbers to the kitchen.
+const NUMBER_RETRIES = 5;
+
+async function createOrderWithNextNumber(input: {
+  venueId: string;
+  tableId: string;
+  sessionId: string;
+  totalKurus: number;
+  idempotencyKey?: string;
+  items: {
+    itemId: string;
+    nameSnapshot: string;
+    unitPriceKurus: number;
+    qty: number;
+    note: string;
+    modifiersJson: string;
+  }[];
+}) {
+  for (let attempt = 0; attempt < NUMBER_RETRIES; attempt++) {
+    try {
+      return await db.$transaction(async (tx) => {
+        const last = await tx.order.findFirst({
+          where: { venueId: input.venueId },
+          orderBy: { number: "desc" },
+          select: { number: true },
+        });
+        return tx.order.create({
+          data: {
+            venueId: input.venueId,
+            tableId: input.tableId,
+            sessionId: input.sessionId,
+            number: (last?.number ?? 0) + 1,
+            totalKurus: input.totalKurus,
+            idempotencyKey: input.idempotencyKey,
+            items: { create: input.items },
+          },
+        });
+      });
+    } catch (err) {
+      // Two in-flight submissions with the same key: the loser reads back the
+      // winner's order rather than erroring or creating a duplicate.
+      if (isIdempotencyConflict(err) && input.idempotencyKey) {
+        return db.order.findFirstOrThrow({
+          where: { sessionId: input.sessionId, idempotencyKey: input.idempotencyKey },
+        });
+      }
+      if (!isTicketNumberConflict(err) || attempt === NUMBER_RETRIES - 1) {
+        if (isTicketNumberConflict(err)) return null;
+        throw err;
+      }
+      // Brief jittered backoff so simultaneous retries don't collide again.
+      await new Promise((r) => setTimeout(r, 15 * (attempt + 1) + Math.random() * 25));
+    }
+  }
+  return null;
+}
+
+function conflictFields(err: unknown): string[] | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as { code?: string; meta?: { target?: unknown } };
+  if (e.code !== "P2002") return null;
+  const target = e.meta?.target;
+  return Array.isArray(target) ? target.map(String) : [String(target ?? "")];
+}
+
+function isIdempotencyConflict(err: unknown): boolean {
+  return conflictFields(err)?.some((f) => f.includes("idempotencyKey")) ?? false;
+}
+
+function isTicketNumberConflict(err: unknown): boolean {
+  const fields = conflictFields(err);
+  if (!fields) return false;
+  // Must not match the (sessionId, idempotencyKey) index, which is handled
+  // separately and means something entirely different.
+  if (fields.some((f) => f.includes("idempotencyKey"))) return false;
+  return fields.some((f) => f.includes("number") || f.includes("venueId"));
 }
 
 // The customer's own orders for this session's table (whole-table view so a

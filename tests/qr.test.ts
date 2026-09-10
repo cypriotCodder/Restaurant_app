@@ -48,6 +48,14 @@ describe("verifyTableQr", () => {
     expect(verifyTableQr(SECRET, CODE, 1, "A".repeat(100))).toBe(false);
   });
 
+  it("rejects multi-byte signatures that match on character length", () => {
+    // 24 characters, but 48 bytes. Comparing `.length` instead of byte length
+    // let these through to timingSafeEqual, which threw and 500'd /scan.
+    expect(() => verifyTableQr(SECRET, CODE, 1, "ü".repeat(24))).not.toThrow();
+    expect(verifyTableQr(SECRET, CODE, 1, "ü".repeat(24))).toBe(false);
+    expect(verifyTableQr(SECRET, CODE, 1, "\u{1F600}".repeat(12))).toBe(false);
+  });
+
   it("rejects a truncated but otherwise correct signature", () => {
     const valid = signTableQr(SECRET, CODE, 1);
     expect(verifyTableQr(SECRET, CODE, 1, valid.slice(0, 23))).toBe(false);

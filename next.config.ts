@@ -1,5 +1,28 @@
 import type { NextConfig } from "next";
 
+// Everything this app renders is first-party: no third-party scripts, no
+// embeds, no remote styles. The one exception is next/font/google, which is
+// self-hosted at build time and so needs no font-src entry of its own.
+const csp = [
+  "default-src 'self'",
+  // Next's inline bootstrap and hydration payload require 'unsafe-inline'
+  // here; there is no third-party script origin to allow beyond that.
+  "script-src 'self' 'unsafe-inline'",
+  // Tailwind and the design tokens are applied as inline style attributes.
+  "style-src 'self' 'unsafe-inline'",
+  // Menu photos come from Vercel Blob; data: covers the generated QR PNGs.
+  "img-src 'self' data: blob: https://*.public.blob.vercel-storage.com",
+  "font-src 'self' data:",
+  // XHR/SSE are same-origin only.
+  "connect-src 'self'",
+  "form-action 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  // Belt-and-braces alongside the X-Frame-Options header below.
+  "frame-ancestors 'none'",
+  "upgrade-insecure-requests",
+].join("; ");
+
 const nextConfig: NextConfig = {
   async headers() {
     return [
@@ -23,6 +46,7 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
+          { key: "Content-Security-Policy", value: csp },
         ],
       },
     ];

@@ -55,6 +55,12 @@ const statusTagClass: Record<string, string> = {
   rejected: "tag-neutral",
 };
 
+/** Random per-submission key; crypto.randomUUID is unavailable on http origins. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export default function CustomerApp({ code }: { code: string }) {
   const [locale, setLocale] = useState<Locale>("tr");
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -66,7 +72,12 @@ export default function CustomerApp({ code }: { code: string }) {
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [toast, setToast] = useState("");
   const [activeCat, setActiveCat] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
   const cartKey = `cart_${code}`;
+  // One key per cart-load, minted on first submit and only cleared once an
+  // order is actually placed. A retry after a timeout the customer never saw
+  // land therefore reuses it, and the server returns the original order.
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   // ---------- data loading ----------
   const loadMenu = useCallback(async () => {
@@ -152,15 +163,35 @@ export default function CustomerApp({ code }: { code: string }) {
   const cartCount = cart.reduce((s, l) => s + l.qty, 0);
 
   async function submitOrder() {
-    const res = await fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        items: cart.map(({ itemId, qty, note, optionIds }) => ({ itemId, qty, note, optionIds })),
-      }),
-    });
+    // Guards the double-tap: on a slow connection the button stays visible
+    // long enough to be pressed again before the first request resolves.
+    if (submitting) return;
+    setSubmitting(true);
+    idempotencyKeyRef.current ??= newIdempotencyKey();
+
+    let res: Response;
+    try {
+      res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: cart.map(({ itemId, qty, note, optionIds }) => ({ itemId, qty, note, optionIds })),
+          idempotencyKey: idempotencyKeyRef.current,
+        }),
+      });
+    } catch {
+      // Network failure: the order may or may not have landed. Keep the key so
+      // a retry is resolved as a replay rather than placing a second order.
+      setSubmitting(false);
+      setToast(t(locale, "orderFailed"));
+      setTimeout(() => setToast(""), 5000);
+      return;
+    }
+    setSubmitting(false);
+
     if (res.ok) {
       const data = await res.json();
+      idempotencyKeyRef.current = null;
       setCart([]);
       setCartOpen(false);
       setToast(`${t(locale, "orderSubmitted")} ${t(locale, "orderNumber")}${data.number} — ${t(locale, "payAtTill")}`);
@@ -458,8 +489,14 @@ export default function CustomerApp({ code }: { code: string }) {
                 </div>
               </div>
               <p className="text-xs mt-3 mb-3" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "payAtTill")}</p>
-              <button onClick={submitOrder} className="btn btn-primary w-full justify-center py-4 text-sm">
-                {locale === "en" ? "SUBMIT ORDER" : "SİPARİŞİ GÖNDER · SUBMIT ORDER"}
+              <button
+                onClick={submitOrder}
+                disabled={submitting}
+                className="btn btn-primary w-full justify-center py-4 text-sm"
+              >
+                {submitting
+                  ? locale === "en" ? "SENDING..." : "GÖNDERİLİYOR..."
+                  : locale === "en" ? "SUBMIT ORDER" : "SİPARİŞİ GÖNDER · SUBMIT ORDER"}
               </button>
             </>
           )}

@@ -63,6 +63,11 @@ model StaffUser {
   name         String
   passwordHash String
   role         String // "admin" | "desk"
+  active       Boolean  @default(true)
+  // Bumped to invalidate every token already issued to this account. Staff
+  // tokens are stateless JWTs with a 12h life, so without this a password
+  // change or a dismissal leaves the old session working until it expires.
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
 }
 
@@ -154,12 +159,22 @@ model Order {
   paymentStatus   String  @default("unpaid") // unpaid|pending|paid|refunded
   paymentProvider String?
   paymentRef      String?
+  // Client-generated per-submission key. A double-tap on a laggy connection
+  // sends the same key twice; the second insert loses the unique race and the
+  // route returns the order that already exists instead of creating a second.
+  idempotencyKey  String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   items      OrderItem[]
   deliveries PosDelivery[]
 
+  // The per-venue ticket number is derived from max(number)+1, which two
+  // concurrent orders can read identically under READ COMMITTED. This makes
+  // the collision a hard error the route retries, instead of two different
+  // orders printing the same ticket number in the kitchen.
+  @@unique([venueId, number])
+  @@unique([sessionId, idempotencyKey])
   @@index([venueId, status])
 }
 
@@ -208,12 +223,21 @@ model PosDelivery {
   status    String   @default("pending") // pending|claimed|sent|failed
   attempts  Int      @default(0)
   lastError String?
+  // Set when a pull-based agent claims the row. A claim that is still held
+  // after CLAIM_TIMEOUT_MS is assumed dead (agent crashed, lost power, dropped
+  // the network mid-print) and is swept back to "pending" for redelivery —
+  // without this a stranded claim silently stops the kitchen printing.
+  claimedAt DateTime?
+  // Identifies which claim attempt won the row, so two agents polling the same
+  // venue concurrently can never both be handed the same ticket.
+  claimId   String?
   // Pre-rendered ticket payload (base64 ESC/POS bytes or plain text).
   payload   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([venueId, status])
+  @@index([status, claimedAt])
 }
 
 // API keys for on-prem bridge agents pulling the outbox.

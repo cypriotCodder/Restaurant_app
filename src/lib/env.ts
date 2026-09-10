@@ -20,6 +20,11 @@ const schema = z.object({
     .string()
     .regex(/^rediss?:\/\//, "must be a redis:// or rediss:// URL — the REST endpoint cannot SUBSCRIBE"),
   BLOB_READ_WRITE_TOKEN: z.string().min(1, "missing Vercel Blob token"),
+  // Authenticates the Vercel Cron call to /api/cron/pos-sweep. Vercel populates
+  // this automatically for projects with a cron schedule, but it is required
+  // here so a deploy without it fails loudly rather than shipping an outbox
+  // whose only retry path is an open endpoint.
+  CRON_SECRET: z.string().min(16, "must be at least 16 characters — Vercel generates this for cron projects"),
   // Every printed QR is signed and encoded against this origin. Changing it
   // after QRs are printed invalidates the physical codes on the tables.
   NEXT_PUBLIC_BASE_URL: z.string().regex(/^https?:\/\//, "must be an absolute http(s) origin"),

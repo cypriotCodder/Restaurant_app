@@ -14,9 +14,13 @@ import { waitUntil } from "@vercel/functions";
 // With REDIS_URL unset (tests, CI, a bare local run) this degrades to the
 // original single-process behaviour instead of failing.
 
+// tableId rides on the order events so a customer stream can reject an event
+// for another table from the event itself. Without it every connected phone in
+// the venue had to load the order from the database just to discover the event
+// was not theirs — one query per connection per event.
 export type BusEvent =
-  | { type: "order.created"; venueId: string; orderId: string; sessionId: string }
-  | { type: "order.updated"; venueId: string; orderId: string; sessionId: string }
+  | { type: "order.created"; venueId: string; orderId: string; sessionId: string; tableId: string }
+  | { type: "order.updated"; venueId: string; orderId: string; sessionId: string; tableId: string }
   | { type: "menu.changed"; venueId: string }
   | { type: "session.revoked"; venueId: string; sessionId: string };
 

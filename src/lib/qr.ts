@@ -18,9 +18,13 @@ export function verifyTableQr(
   qrVersion: number,
   sig: string
 ): boolean {
-  const expected = signTableQr(qrSecret, tableCode, qrVersion);
-  if (sig.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  const expected = Buffer.from(signTableQr(qrSecret, tableCode, qrVersion), "utf8");
+  // Compare BYTE lengths, not character lengths: `?k=` is attacker-controlled
+  // and a multi-byte string can match on `.length` while producing a longer
+  // buffer, which makes timingSafeEqual throw and 500 the scan route.
+  const actual = Buffer.from(sig, "utf8");
+  if (actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
 }
 
 export function tableQrUrl(baseUrl: string, qrSecret: string, tableCode: string, qrVersion: number): string {

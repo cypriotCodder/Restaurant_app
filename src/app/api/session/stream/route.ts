@@ -15,11 +15,25 @@ export async function GET() {
   const { tableId, venueId } = session;
 
   return sseResponse(
-    (e) => e.venueId === venueId,
+    // Filtering on tableId here — not inside serialize — is what keeps this
+    // cheap. Every order event in the venue reaches every connected phone, so
+    // deciding relevance from the event itself means one database read per
+    // *relevant* event rather than one per connection per event.
+    (e) => {
+      if (e.venueId !== venueId) return false;
+      if (e.type === "order.created" || e.type === "order.updated") return e.tableId === tableId;
+      return e.type === "menu.changed";
+    },
     async (e) => {
       if (e.type === "menu.changed") return { type: "menu.changed" };
       if (e.type === "order.created" || e.type === "order.updated") {
-        const order = await db.order.findUnique({ where: { id: e.orderId } });
+        const order = await db.order.findUnique({
+          where: { id: e.orderId },
+          select: { id: true, tableId: true, status: true, rejectReason: true },
+        });
+        // The filter already matched on the event's tableId; this re-check
+        // covers the case of an order moved between tables after the event
+        // was published.
         if (!order || order.tableId !== tableId) return null;
         return {
           type: "order.updated",

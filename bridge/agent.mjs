@@ -17,6 +17,27 @@
 
 import net from "net";
 
+// Reverse of the PC857 map the server encodes tickets with (src/lib/pos/ticket.ts).
+// Node's TextDecoder has no ibm857, so DRY_RUN decodes with this table in order
+// to show the same Turkish text the printer will actually produce.
+const PC857_DECODE = new Map([
+  [0x87, "ç"], [0x80, "Ç"], [0x81, "ü"], [0x9a, "Ü"], [0x94, "ö"], [0x99, "Ö"],
+  [0x8d, "ı"], [0x98, "İ"], [0x9f, "ş"], [0x9e, "Ş"], [0xa7, "ğ"], [0xa6, "Ğ"],
+  [0x83, "â"], [0xb6, "Â"], [0x8c, "î"], [0xd7, "Î"], [0x96, "û"], [0xea, "Û"],
+]);
+
+function decodePc857(bytes) {
+  let out = "";
+  for (const b of bytes) {
+    if (b === 0x0a) { out += "\n"; continue; }
+    const mapped = PC857_DECODE.get(b);
+    if (mapped) { out += mapped; continue; }
+    if (b >= 0x20 && b <= 0x7e) out += String.fromCharCode(b);
+    // Control/ESC sequences are dropped from the preview.
+  }
+  return out;
+}
+
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const BRIDGE_KEY = process.env.BRIDGE_KEY;
 const PRINTER_HOST = process.env.PRINTER_HOST;
@@ -62,7 +83,7 @@ async function tick() {
     try {
       if (DRY_RUN) {
         console.log(`\n--- ticket #${d.orderNumber} (${d.tableName}) ---`);
-        console.log(bytes.toString("latin1").replace(/[^\x20-\x7E\n]/g, ""));
+        console.log(decodePc857(bytes));
       } else {
         await printRaw(bytes);
         console.log(`printed ticket #${d.orderNumber} (${d.tableName})`);

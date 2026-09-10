@@ -33,6 +33,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# local databases — the retired SQLite dev db was committed once and carried
+# seeded staff password hashes; never again
+*.db
+*.db-journal
+prisma/*.db
+
 # vercel
 .vercel
 

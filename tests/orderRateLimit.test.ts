@@ -166,6 +166,9 @@ describe("successful order", () => {
       venueId: "venue_1",
       orderId: "order_1",
       sessionId: "sess_1",
+      // Carried on the event so customer streams can filter by table without
+      // loading the order — see tests/sessionStream.test.ts.
+      tableId: "table_1",
     });
   });
 

@@ -36,6 +36,7 @@ export async function GET(
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 2 * 60 * 60,
   });
