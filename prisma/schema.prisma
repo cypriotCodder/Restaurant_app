@@ -4,6 +4,12 @@
 
 generator client {
   provider = "prisma-client-js"
+  // The venue terminal runs Windows; builds happen on a developer machine.
+  // prisma generate only emits an engine for the host it runs on, so a bundle
+  // built on macOS or Linux ships an engine Windows cannot load and the server
+  // dies on its first query. Listing the target explicitly puts both engines in
+  // the bundle. Add a target here for any OS a venue actually runs.
+  binaryTargets = ["native", "windows"]
 }
 
 datasource db {
