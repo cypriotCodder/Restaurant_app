@@ -1,32 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import type { PosHealth } from "./types";
 // A bridge agent that dies mid-service is otherwise invisible: orders keep
 // reaching the desk while nothing prints in the kitchen. This panel is how
 // staff find out before a customer does.
 export default function PosHealthPanel() {
-  const [health, setHealth] = useState<PosHealth | null>(null);
+  const { data: health, mutate } = useSWR<PosHealth>("/api/admin/pos/health", {
+    ...swrDefaults,
+    refreshInterval: 20000,
+  });
   const [busy, setBusy] = useState<string | null>(null);
   // The clock the staleness read below uses. Held in state and advanced by the
   // poll interval so nothing calls Date.now() during render.
   const [now, setNow] = useState(() => Date.now());
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/pos/health");
-    if (res.ok) setHealth(await res.json());
-  }, []);
-
+  // SWR owns the refetch; this only keeps the "x minutes ago" labels moving.
   useEffect(() => {
-    // Wrapped so the state update lands after the await rather than
-    // synchronously inside the effect body.
-    (async () => { await load(); })();
-    const t = setInterval(() => {
-      setNow(Date.now());
-      void load();
-    }, 20000);
+    const t = setInterval(() => setNow(Date.now()), 20000);
     return () => clearInterval(t);
-  }, [load]);
+  }, []);
 
   if (!health) return null;
 
@@ -43,7 +38,7 @@ export default function PosHealthPanel() {
   async function retry(id: string) {
     setBusy(id);
     await fetch(`/api/admin/pos/${id}/retry`, { method: "POST" });
-    await load();
+    await mutate();
     setBusy(null);
   }
 

@@ -1,44 +1,57 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import useSWR from "swr";
+import useSWRInfinite from "swr/infinite";
+import { jsonFetcher, swrDefaults } from "@/lib/swr";
 import { useMoney } from "../MoneyContext";
 import type { LogOrder, Stats } from "./types";
+
+type OrdersPage = { orders: LogOrder[]; nextCursor: string | null };
 export default function OrdersTab() {
   const money = useMoney();
-  const [orders, setOrders] = useState<LogOrder[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [days, setDays] = useState(7);
-  const [truncated, setTruncated] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "cancelled">("all");
 
-  const load = useCallback(async () => {
-    const [ordersRes, statsRes] = await Promise.all([
-      fetch(`/api/admin/orders?days=${days}`),
-      fetch("/api/admin/stats"),
-    ]);
-    if (ordersRes.ok) {
-      const data = await ordersRes.json();
-      setOrders(data.orders);
-      setTruncated(data.truncated);
-    }
-    if (statsRes.ok) setStats(await statsRes.json());
-  }, [days]);
+  const { data: stats, mutate: mutateStats } = useSWR<Stats>("/api/admin/stats", swrDefaults);
 
-  useEffect(() => {
-    (async () => { await load(); })();
-  }, [load]);
+  // Paged rather than a flat 500-row dump: the first screenful is what the
+  // manager actually reads, and older pages are fetched only if they scroll.
+  const {
+    data: pages,
+    size,
+    setSize,
+    mutate: mutateOrders,
+    isValidating,
+  } = useSWRInfinite<OrdersPage>(
+    (index, previous) => {
+      if (index > 0 && !previous?.nextCursor) return null; // reached the end
+      const cursor = index === 0 ? "" : `&cursor=${previous!.nextCursor}`;
+      return `/api/admin/orders?days=${days}${cursor}`;
+    },
+    jsonFetcher,
+    { ...swrDefaults, revalidateFirstPage: false }
+  );
+
+  const orders = pages?.flatMap((p) => p.orders) ?? [];
+  const hasMore = Boolean(pages?.[pages.length - 1]?.nextCursor);
+
+  const refresh = useCallback(() => {
+    void mutateOrders();
+    void mutateStats();
+  }, [mutateOrders, mutateStats]);
 
   // The screen used to fetch once on mount and then silently go stale for the
   // rest of the shift. Live push, with a poll as the safety net.
   useEffect(() => {
     const es = new EventSource("/api/desk/stream");
-    es.onmessage = () => { void load(); };
-    const poll = setInterval(() => void load(), 60000);
+    es.onmessage = () => { refresh(); };
+    const poll = setInterval(refresh, 60000);
     return () => {
       es.close();
       clearInterval(poll);
     };
-  }, [load]);
+  }, [refresh]);
 
   const displayOrders = orders.filter((o) => {
     if (statusFilter === "completed") return ["served", "ready"].includes(o.status);
@@ -143,12 +156,6 @@ export default function OrdersTab() {
         </div>
       </div>
 
-      {truncated && (
-        <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
-          İlk 500 sipariş gösteriliyor. Tamamı için CSV indirin. / Showing the first 500 — use
-          the CSV export for the full range.
-        </p>
-      )}
 
       {/* Orders table */}
       <div className="bg-white border overflow-x-auto" style={{ borderColor: "var(--color-divider)" }}>
@@ -183,6 +190,16 @@ export default function OrdersTab() {
           </tbody>
         </table>
       </div>
+
+      {hasMore && (
+        <button
+          onClick={() => setSize(size + 1)}
+          disabled={isValidating}
+          className="btn btn-secondary self-center text-xs"
+        >
+          {isValidating ? "..." : "Daha fazla göster / Load more"}
+        </button>
+      )}
     </div>
   );
 }

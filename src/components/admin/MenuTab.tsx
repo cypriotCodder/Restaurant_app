@@ -1,22 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import { useMoney } from "../MoneyContext";
 import ItemEditor from "./ItemEditor";
 import type { AdminCategory, AdminItem } from "./types";
 export default function MenuTab() {
   const money = useMoney();
-  const [categories, setCategories] = useState<AdminCategory[]>([]);
+  const { data, mutate } = useSWR<{ categories: AdminCategory[] }>("/api/admin/categories", swrDefaults);
+  const categories = data?.categories ?? [];
   const [editing, setEditing] = useState<AdminItem | "new" | null>(null);
   const [newCat, setNewCat] = useState("");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("");
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/categories");
-    if (res.ok) setCategories((await res.json()).categories);
-  }, []);
-  useEffect(() => { (async () => { await load(); })(); }, [load]);
 
   async function addCategory() {
     if (!newCat.trim()) return;
@@ -26,7 +24,7 @@ export default function MenuTab() {
       body: JSON.stringify({ nameTr: newCat.trim(), sortOrder: categories.length }),
     });
     setNewCat("");
-    load();
+    mutate();
   }
 
   async function toggleAvailable(item: AdminItem) {
@@ -35,7 +33,7 @@ export default function MenuTab() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ available: !item.available }),
     });
-    load();
+    mutate();
   }
 
   // Flatten all items + apply search & category filter
@@ -105,7 +103,7 @@ export default function MenuTab() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ active: !c.active }),
                   });
-                  load();
+                  mutate();
                 }}
                 className="btn-ghost text-xs"
               >
@@ -115,7 +113,7 @@ export default function MenuTab() {
                 onClick={async () => {
                   const res = await fetch(`/api/admin/categories/${c.id}`, { method: "DELETE" });
                   if (!res.ok) alert("Kategori boş değil — önce ürünleri taşıyın/silin.");
-                  load();
+                  mutate();
                 }}
                 className="text-xs font-medium"
                 style={{ color: "var(--color-heaven-orange)" }}
@@ -182,7 +180,7 @@ export default function MenuTab() {
                     onClick={async () => {
                       if (!confirm(`"${i.nameTr}" silinsin mi?`)) return;
                       await fetch(`/api/admin/items/${i.id}`, { method: "DELETE" });
-                      load();
+                      mutate();
                     }}
                     className="ml-3 text-sm"
                     style={{ color: "var(--color-heaven-orange)" }}
@@ -208,7 +206,7 @@ export default function MenuTab() {
           item={editing === "new" ? null : editing}
           categories={categories}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={() => { setEditing(null); mutate(); }}
         />
       )}
     </div>

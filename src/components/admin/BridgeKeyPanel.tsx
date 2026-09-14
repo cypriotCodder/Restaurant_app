@@ -1,23 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import type { BridgeKeyRow } from "./types";
 // The on-prem bridge agent authenticates with one of these. Previously they
 // existed only from the seed, so replacing a compromised key meant SQL.
 export default function BridgeKeyPanel() {
-  const [keys, setKeys] = useState<BridgeKeyRow[]>([]);
+  // Same key as VenuePanel: SWR serves both panels from one request.
+  const { data, mutate } = useSWR<{ bridgeKeys: BridgeKeyRow[] }>("/api/admin/venue", swrDefaults);
+  const keys = data?.bridgeKeys ?? [];
   const [label, setLabel] = useState("");
   const [issued, setIssued] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/venue");
-    if (res.ok) setKeys((await res.json()).bridgeKeys);
-  }, []);
-
-  useEffect(() => {
-    (async () => { await load(); })();
-  }, [load]);
 
   async function create() {
     setBusy(true);
@@ -31,14 +27,14 @@ export default function BridgeKeyPanel() {
       const d = await res.json();
       setIssued(d.key);
       setLabel("");
-      await load();
+      await mutate();
     }
   }
 
   async function remove(id: string) {
     if (!confirm("Bu anahtar silinsin mi? Kullanan ajan çalışmayı durdurur.")) return;
     await fetch(`/api/admin/bridge-keys?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-    await load();
+    await mutate();
   }
 
   return (

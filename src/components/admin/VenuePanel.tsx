@@ -1,31 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import type { VenueForm } from "./types";
 // Venue configuration. Every field here used to be a database column with no
 // way to change it short of a SQL statement.
 export default function VenuePanel() {
+  // Shares the /api/admin/venue key with BridgeKeyPanel, so the two panels
+  // cost one request between them.
+  const { data } = useSWR<{
+    venue: VenueForm;
+    options: { currencies: string[]; posAdapters: string[] };
+  }>("/api/admin/venue", swrDefaults);
+  const options = data?.options ?? { currencies: [], posAdapters: [] };
+
+  // The form is a working copy: the manager edits it before it is saved, so it
+  // cannot read straight off the cache. Reseed it whenever a fresh payload
+  // arrives — including after a save revalidates the key.
   const [form, setForm] = useState<VenueForm | null>(null);
-  const [options, setOptions] = useState<{ currencies: string[]; posAdapters: string[] }>({
-    currencies: [],
-    posAdapters: [],
-  });
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (data?.venue) setForm(data.venue);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [data?.venue]);
+
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/venue");
-    if (res.ok) {
-      const d = await res.json();
-      setForm(d.venue);
-      setOptions(d.options);
-    }
-  }, []);
-
-  useEffect(() => {
-    (async () => { await load(); })();
-  }, [load]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();

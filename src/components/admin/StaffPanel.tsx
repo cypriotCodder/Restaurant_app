@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import type { StaffFormValues, StaffRow } from "./types";
 // Staff tokens are stateless 12h JWTs, so "sign out everywhere" and
 // deactivation both work by bumping the account's token version. Revocation
@@ -12,25 +14,14 @@ import type { StaffFormValues, StaffRow } from "./types";
 // account is — role, password, deactivation — bumps its token version and takes
 // effect within the 30s account-cache window rather than in 12 hours.
 export default function StaffPanel() {
-  const [rows, setRows] = useState<StaffRow[]>([]);
-  const [self, setSelf] = useState<string>("");
+  const { data, mutate } = useSWR<{ staff: StaffRow[]; self: string }>("/api/admin/staff", swrDefaults);
+  const rows = data?.staff ?? [];
+  const self = data?.self ?? "";
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<StaffRow | null>(null);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/staff");
-    if (res.ok) {
-      const data = await res.json();
-      setRows(data.staff);
-      setSelf(data.self);
-    }
-  }, []);
-
-  useEffect(() => {
-    (async () => { await load(); })();
-  }, [load]);
 
   async function act(id: string, body: Record<string, unknown>) {
     setBusy(id);
@@ -46,7 +37,7 @@ export default function StaffPanel() {
       setError(staffErrorText(b.error, b.detail));
       return false;
     }
-    await load();
+    await mutate();
     return true;
   }
 
@@ -136,7 +127,7 @@ export default function StaffPanel() {
               return staffErrorText(b.error, b.detail);
             }
             setAdding(false);
-            await load();
+            await mutate();
             return null;
           }}
         />
@@ -163,7 +154,7 @@ export default function StaffPanel() {
               return staffErrorText(b.error, b.detail);
             }
             setEditing(null);
-            await load();
+            await mutate();
             return null;
           }}
         />

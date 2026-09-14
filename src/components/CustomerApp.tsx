@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Locale, t } from "@/lib/i18n";
 import { formatKurus } from "@/lib/money";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import { CurrencyProvider } from "./MoneyContext";
 import BillPanel from "./customer/BillPanel";
 import CartBar from "./customer/CartBar";
@@ -22,10 +24,8 @@ const CartSheet = dynamic(() => import("./customer/CartSheet"));
 
 export default function CustomerApp({ code }: { code: string }) {
   const [locale, setLocale] = useState<Locale>("tr");
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [expired, setExpired] = useState(false);
   const [tab, setTab] = useState<"menu" | "orders" | "bill">("menu");
-  const [bill, setBill] = useState<CustomerBill | null>(null);
   const [requestingBill, setRequestingBill] = useState(false);
   // Set when staff settle the table: the party has paid and their phones are
   // revoked, so the app shows a thank-you rather than a scary "session expired".
@@ -33,7 +33,6 @@ export default function CustomerApp({ code }: { code: string }) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [selected, setSelected] = useState<Item | null>(null);
-  const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [toast, setToast] = useState("");
   const [activeCat, setActiveCat] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
@@ -44,28 +43,30 @@ export default function CustomerApp({ code }: { code: string }) {
   const idempotencyKeyRef = useRef<string | null>(null);
 
   // ---------- data loading ----------
-  const loadMenu = useCallback(async () => {
-    const res = await fetch(`/api/menu/${code}`);
-    if (res.status === 401) return setExpired(true);
-    if (res.ok) {
-      const data: Menu = await res.json();
-      setMenu(data);
-      setLocale((prev) => prev ?? (data.venue.defaultLocale as Locale));
-      setActiveCat((c) => c || data.categories[0]?.id || "");
-    }
-  }, [code]);
-
-  const loadOrders = useCallback(async () => {
-    const res = await fetch("/api/orders");
-    if (res.status === 401) return setExpired(true);
-    if (res.ok) setOrders((await res.json()).orders);
+  // A 401 on any of these means the table session was revoked or expired. It
+  // is the same outcome whichever call notices first.
+  const onAuthError = useCallback((err: unknown) => {
+    if ((err as { status?: number })?.status === 401) setExpired(true);
   }, []);
+  const options = { ...swrDefaults, onError: onAuthError };
 
-  const loadBill = useCallback(async () => {
-    const res = await fetch("/api/bill");
-    if (res.status === 401) return setExpired(true);
-    if (res.ok) setBill(await res.json());
-  }, []);
+  const { data: menu, mutate: loadMenu } = useSWR<Menu>(`/api/menu/${code}`, options);
+  const { data: ordersData, mutate: loadOrders } = useSWR<{ orders: CustomerOrder[] }>(
+    "/api/orders",
+    options
+  );
+  const { data: bill, mutate: loadBill } = useSWR<CustomerBill>("/api/bill", options);
+  const orders = ordersData?.orders ?? [];
+
+  // Seeded from the menu payload, then owned by the customer: the language
+  // toggle and the category rail both stay put once they have touched them.
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (!menu) return;
+    setLocale((prev) => prev ?? (menu.venue.defaultLocale as Locale));
+    setActiveCat((c) => c || menu.categories[0]?.id || "");
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [menu]);
 
   // Restore the cart that survived a re-scan. This has to stay a synchronous
   // post-mount effect: localStorage does not exist during SSR, so hydrating it
@@ -82,12 +83,6 @@ export default function CustomerApp({ code }: { code: string }) {
     } catch {}
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [cartKey]);
-
-  useEffect(() => {
-    (async () => {
-      await Promise.all([loadMenu(), loadOrders(), loadBill()]);
-    })();
-  }, [loadMenu, loadOrders, loadBill]);
 
   useEffect(() => {
     try {
@@ -269,7 +264,7 @@ export default function CustomerApp({ code }: { code: string }) {
 
         {tab === "bill" && (
           <BillPanel
-            bill={bill}
+            bill={bill ?? null}
             locale={locale}
             money={money}
             askForBill={askForBill}

@@ -1,21 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
+import { swrDefaults } from "@/lib/swr";
 import type { AdminTable } from "./types";
 export default function TablesTab() {
-  const [tables, setTables] = useState<AdminTable[]>([]);
+  // Sessions expire on their own, so the list goes stale without a poll.
+  const { data, mutate } = useSWR<{ tables: AdminTable[] }>("/api/admin/tables", {
+    ...swrDefaults,
+    refreshInterval: 30000,
+  });
+  const tables = data?.tables ?? [];
   const [newName, setNewName] = useState("");
   const [qrFor, setQrFor] = useState<AdminTable | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/admin/tables");
-    if (res.ok) setTables((await res.json()).tables);
-  }, []);
-  useEffect(() => {
-    (async () => { await load(); })();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
-  }, [load]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -29,14 +27,14 @@ export default function TablesTab() {
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Masa adı (ör. Masa 9)" className="input" onKeyDown={(e) => e.key === "Enter" && newName.trim() && (async () => {
             await fetch("/api/admin/tables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName.trim() }) });
             setNewName("");
-            load();
+            mutate();
           })()}  />
           <button
             onClick={async () => {
               if (!newName.trim()) return;
               await fetch("/api/admin/tables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName.trim() }) });
               setNewName("");
-              load();
+              mutate();
             }}
             className="btn btn-primary"
           >
@@ -73,7 +71,7 @@ export default function TablesTab() {
                   onClick={async () => {
                     if (!confirm(`${tb.name}: QR yenilensin mi?`)) return;
                     await fetch(`/api/admin/tables/${tb.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ regenerateQr: true }) });
-                    load();
+                    mutate();
                   }}
                   className="text-xs" style={{ color: "var(--color-accent-700)" }}
                 >
@@ -82,7 +80,7 @@ export default function TablesTab() {
                 <button
                   onClick={async () => {
                     await fetch(`/api/admin/tables/${tb.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: !tb.active }) });
-                    load();
+                    mutate();
                   }}
                   className="text-xs" style={{ color: "var(--color-neutral-900)" }}
                 >
@@ -95,7 +93,7 @@ export default function TablesTab() {
                     for (const s of tb.activeSessions) {
                       await fetch(`/api/admin/sessions/${s.id}`, { method: "DELETE" });
                     }
-                    load();
+                    mutate();
                   }}
                   className="text-xs" style={{ color: "var(--color-heaven-orange)" }}
                 >
