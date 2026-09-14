@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
+import { openOrJoinVisit } from "./visit";
 
 // Customer table sessions — the enforcement core of the anti-remote design.
 // A session exists only after a valid signed-QR hit, is bound to one table,
@@ -18,15 +19,20 @@ export type ActiveSession = {
   tableId: string;
   tableCode: string;
   tableName: string;
+  /** The party this phone belongs to; null only for pre-visit sessions. */
+  visitId: string | null;
 };
 
 export async function mintSession(tableId: string, venueId: string): Promise<string> {
   const token = randomBytes(24).toString("base64url");
+  // Joins the party already at this table, or starts one if the table is idle.
+  const visitId = await openOrJoinVisit(tableId, venueId);
   await db.tableSession.create({
     data: {
       tableId,
       venueId,
       token,
+      visitId,
       expiresAt: new Date(Date.now() + HARD_CAP_MS),
     },
   });
@@ -73,5 +79,6 @@ export async function getActiveSession(expectedTableCode?: string): Promise<Acti
     tableId: session.tableId,
     tableCode: session.table.code,
     tableName: session.table.name,
+    visitId: session.visitId,
   };
 }

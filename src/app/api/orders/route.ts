@@ -124,6 +124,7 @@ export async function POST(req: NextRequest) {
     venueId: session.venueId,
     tableId: session.tableId,
     sessionId: session.id,
+    visitId: session.visitId,
     totalKurus,
     idempotencyKey,
     items: orderItems,
@@ -156,6 +157,7 @@ async function createOrderWithNextNumber(input: {
   venueId: string;
   tableId: string;
   sessionId: string;
+  visitId: string | null;
   totalKurus: number;
   idempotencyKey?: string;
   items: {
@@ -180,6 +182,7 @@ async function createOrderWithNextNumber(input: {
             venueId: input.venueId,
             tableId: input.tableId,
             sessionId: input.sessionId,
+            visitId: input.visitId,
             number: (last?.number ?? 0) + 1,
             totalKurus: input.totalKurus,
             idempotencyKey: input.idempotencyKey,
@@ -227,13 +230,20 @@ function isTicketNumberConflict(err: unknown): boolean {
   return fields.some((f) => f.includes("number") || f.includes("venueId"));
 }
 
-// The customer's own orders for this session's table (whole-table view so a
-// group sees everything ordered to the table, matching how staff see it).
+// Everything this party has ordered — a whole-table view, so a group sees each
+// other's orders the way staff do.
+//
+// Scoped to the visit rather than to a wall-clock window: the previous four-hour
+// window could show a newly-seated party the orders of the party before them.
 export async function GET() {
   const session = await getActiveSession();
   if (!session) return NextResponse.json({ error: "no_session" }, { status: 401 });
   const orders = await db.order.findMany({
-    where: { tableId: session.tableId, createdAt: { gt: new Date(Date.now() - 4 * 60 * 60 * 1000) } },
+    where: session.visitId
+      ? { visitId: session.visitId }
+      : // Pre-visit sessions (minted before this feature shipped) keep the old
+        // behaviour until they expire, rather than showing nothing.
+        { tableId: session.tableId, createdAt: { gt: new Date(Date.now() - 4 * 60 * 60 * 1000) } },
     orderBy: { createdAt: "desc" },
     include: { items: true },
   });

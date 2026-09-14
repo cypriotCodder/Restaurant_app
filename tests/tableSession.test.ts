@@ -19,6 +19,9 @@ const create = vi.fn();
 const findMany = vi.fn();
 const update = vi.fn();
 const updateMany = vi.fn();
+// Minting a session also joins the table's open visit; the visit rules
+// themselves are covered in tests/visit.test.ts.
+const visitFindFirst = vi.fn();
 
 vi.mock("@/lib/db", () => ({
   db: {
@@ -28,6 +31,12 @@ vi.mock("@/lib/db", () => ({
       findMany: (...a: unknown[]) => findMany(...a),
       update: (...a: unknown[]) => update(...a),
       updateMany: (...a: unknown[]) => updateMany(...a),
+    },
+    tableVisit: {
+      findFirst: (...a: unknown[]) => visitFindFirst(...a),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      delete: vi.fn(),
     },
   },
 }));
@@ -56,6 +65,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   cookieToken = "tok_1";
   findMany.mockResolvedValue([]);
+  // A table with a party already at it, so mintSession joins rather than opens.
+  visitFindFirst.mockResolvedValue({ id: "visit_1" });
   create.mockResolvedValue({});
   update.mockResolvedValue({});
   updateMany.mockResolvedValue({});

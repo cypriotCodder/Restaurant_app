@@ -1,18 +1,14 @@
 // Multi-tenant QR table-ordering platform.
-// Neon Postgres (Vercel Marketplace). `url` is the pooled connection used by
-// the app at runtime; `directUrl` is the unpooled one Prisma needs for
-// migrations, which cannot run through PgBouncer. Both are supplied by the
-// Neon integration — DATABASE_URL_UNPOOLED is Neon's own name for the direct
-// endpoint, so it survives `vercel env pull`.
+// Postgres on the venue's own server: a single direct connection, so there is
+// no separate pooled/unpooled pair to configure.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DATABASE_URL_UNPOOLED")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Venue {
@@ -37,6 +33,7 @@ model Venue {
   attempts   OrderAttempt[]
   deliveries PosDelivery[]
   bridgeKeys BridgeKey[]
+  visits     TableVisit[]
 }
 
 model Table {
@@ -53,6 +50,48 @@ model Table {
 
   sessions TableSession[]
   orders   Order[]
+  visits   TableVisit[]
+}
+
+// One party's stay at a table — the unit a bill covers.
+//
+// A table seats up to MAX_ACTIVE_PER_TABLE phones, each with its own
+// TableSession, so a bill cannot be per-session: the visit groups every session
+// and order belonging to the same party. It opens when the first phone scans at
+// an idle table, and closes when staff settle it at the till.
+//
+// It also replaces the four-hour window the customer's order list used to use,
+// which could show a new party the previous party's orders.
+model TableVisit {
+  id      String @id @default(cuid())
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id])
+  tableId String
+  table   Table  @relation(fields: [tableId], references: [id])
+
+  // open | bill_requested | closed
+  status          String    @default("open")
+  openedAt        DateTime  @default(now())
+  // Set when a customer taps "hesap istiyorum"; cleared if staff dismiss it.
+  billRequestedAt DateTime?
+  closedAt        DateTime?
+  // settled — staff took payment. abandoned — every session died without
+  // settlement (walkout, or staff forgot) and the sweep closed it.
+  closedReason    String?
+
+  // Snapshot of the money at settlement, so later menu edits or refunds cannot
+  // rewrite what the till actually recorded that night.
+  totalKurus      Int?
+  paymentMethod   String? // cash | card
+  paidAmountKurus Int?
+  closedByStaffId String?
+
+  sessions TableSession[]
+  orders   Order[]
+
+  // Finding the open visit for a table is the hottest query in the flow.
+  @@index([tableId, status])
+  @@index([venueId, status])
 }
 
 model StaffUser {
@@ -84,21 +123,21 @@ model Category {
 }
 
 model MenuItem {
-  id         String  @id @default(cuid())
+  id         String   @id @default(cuid())
   venueId    String
-  venue      Venue   @relation(fields: [venueId], references: [id])
+  venue      Venue    @relation(fields: [venueId], references: [id])
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id])
   nameTr     String
   nameEn     String
-  descTr     String  @default("")
-  descEn     String  @default("")
+  descTr     String   @default("")
+  descEn     String   @default("")
   priceKurus Int
   photoUrl   String?
   // Comma-separated tags: "vegan,gluten,nuts" etc.
-  tags       String  @default("")
-  available  Boolean @default(true) // the 86 toggle
-  sortOrder  Int     @default(0)
+  tags       String   @default("")
+  available  Boolean  @default(true) // the 86 toggle
+  sortOrder  Int      @default(0)
 
   modifierGroups ModifierGroup[]
   orderItems     OrderItem[]
@@ -128,14 +167,18 @@ model ModifierOption {
 }
 
 model TableSession {
-  id         String    @id @default(cuid())
+  id         String      @id @default(cuid())
   venueId    String
-  venue      Venue     @relation(fields: [venueId], references: [id])
+  venue      Venue       @relation(fields: [venueId], references: [id])
   tableId    String
-  table      Table     @relation(fields: [tableId], references: [id])
-  token      String    @unique
-  createdAt  DateTime  @default(now())
-  lastSeenAt DateTime  @default(now())
+  table      Table       @relation(fields: [tableId], references: [id])
+  token      String      @unique
+  // The party this phone belongs to. Nullable for sessions minted before
+  // visits existed.
+  visitId    String?
+  visit      TableVisit? @relation(fields: [visitId], references: [id])
+  createdAt  DateTime    @default(now())
+  lastSeenAt DateTime    @default(now())
   // Hard cap; sliding inactivity window is enforced in code against lastSeenAt.
   expiresAt  DateTime
   revokedAt  DateTime?
@@ -144,30 +187,35 @@ model TableSession {
 }
 
 model Order {
-  id            String   @id @default(cuid())
-  venueId       String
-  venue         Venue    @relation(fields: [venueId], references: [id])
-  tableId       String
-  table         Table    @relation(fields: [tableId], references: [id])
-  sessionId     String
-  session       TableSession @relation(fields: [sessionId], references: [id])
-  number        Int // per-venue sequential ticket number
-  status        String   @default("received") // received|accepted|preparing|ready|served|rejected
-  rejectReason  String?
-  totalKurus    Int
+  id              String       @id @default(cuid())
+  venueId         String
+  venue           Venue        @relation(fields: [venueId], references: [id])
+  tableId         String
+  table           Table        @relation(fields: [tableId], references: [id])
+  sessionId       String
+  session         TableSession @relation(fields: [sessionId], references: [id])
+  // The party's visit, so a bill can total the whole table. Nullable for
+  // orders placed before visits existed.
+  visitId         String?
+  visit           TableVisit?  @relation(fields: [visitId], references: [id])
+  number          Int // per-venue sequential ticket number
+  status          String       @default("received") // received|accepted|preparing|ready|served|rejected
+  rejectReason    String?
+  totalKurus      Int
   // PSP-ready fields; unused at pay-at-till but stable schema for later.
-  paymentStatus   String  @default("unpaid") // unpaid|pending|paid|refunded
+  paymentStatus   String       @default("unpaid") // unpaid|pending|paid|refunded
   paymentProvider String?
   paymentRef      String?
   // Client-generated per-submission key. A double-tap on a laggy connection
   // sends the same key twice; the second insert loses the unique race and the
   // route returns the order that already exists instead of creating a second.
   idempotencyKey  String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   items      OrderItem[]
   deliveries PosDelivery[]
+  edits      OrderEdit[]
 
   // The per-venue ticket number is derived from max(number)+1, which two
   // concurrent orders can read identically under READ COMMITTED. This makes
@@ -176,6 +224,7 @@ model Order {
   @@unique([venueId, number])
   @@unique([sessionId, idempotencyKey])
   @@index([venueId, status])
+  @@index([visitId])
 }
 
 model OrderItem {
@@ -191,6 +240,31 @@ model OrderItem {
   note           String    @default("")
   // JSON array of { name, priceDeltaKurus } snapshots.
   modifiersJson  String    @default("[]")
+  // Set when staff remove the line from the order. The row is kept rather than
+  // deleted so the history of what was ordered survives the correction.
+  voidedAt       DateTime?
+}
+
+// Who changed an order after it was placed, and what they changed.
+//
+// Editing an accepted order means the kitchen may hold a paper ticket that no
+// longer matches, and the bill total moves. Both are worth being able to answer
+// for afterwards, so every correction is recorded with the staff member who
+// made it.
+model OrderEdit {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  staffId   String
+  staffName String
+  // JSON: [{ name, fromQty, toQty }] — enough to reconstruct the amendment
+  // ticket and to explain a total that changed.
+  changesJson String
+  // Whether a ticket had already gone to the kitchen when this was made.
+  afterPrint  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
 }
 
 // Every order *attempt*, including ones rejected before an Order exists
@@ -214,14 +288,14 @@ model OrderAttempt {
 // Outbox for the swappable POS adapter layer. The customer→desk flow never
 // depends on rows here succeeding.
 model PosDelivery {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   venueId   String
-  venue     Venue    @relation(fields: [venueId], references: [id])
+  venue     Venue     @relation(fields: [venueId], references: [id])
   orderId   String
-  order     Order    @relation(fields: [orderId], references: [id])
+  order     Order     @relation(fields: [orderId], references: [id])
   adapter   String
-  status    String   @default("pending") // pending|claimed|sent|failed
-  attempts  Int      @default(0)
+  status    String    @default("pending") // pending|claimed|sent|failed
+  attempts  Int       @default(0)
   lastError String?
   // Set when a pull-based agent claims the row. A claim that is still held
   // after CLAIM_TIMEOUT_MS is assumed dead (agent crashed, lost power, dropped
@@ -233,8 +307,8 @@ model PosDelivery {
   claimId   String?
   // Pre-rendered ticket payload (base64 ESC/POS bytes or plain text).
   payload   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([venueId, status])
   @@index([status, claimedAt])

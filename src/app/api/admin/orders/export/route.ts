@@ -11,12 +11,12 @@ export async function GET(req: NextRequest) {
   const orders = await db.order.findMany({
     where: { venueId: staff.venueId, createdAt: { gt: new Date(Date.now() - days * 86400000) } },
     orderBy: { createdAt: "asc" },
-    include: { items: true, table: true },
+    include: { items: true, table: true, visit: { select: { paymentMethod: true, closedReason: true } } },
   });
 
   const esc = (v: string | number) => `"${String(v).replaceAll('"', '""')}"`;
   const rows = [
-    ["order_number", "created_at", "table", "status", "reject_reason", "item", "qty", "unit_price_try", "line_total_try", "note", "modifiers", "order_total_try", "payment_status"].join(","),
+    ["order_number", "created_at", "table", "status", "reject_reason", "item", "qty", "unit_price_try", "line_total_try", "note", "modifiers", "order_total_try", "payment_status", "payment_method", "visit_outcome"].join(","),
   ];
   for (const o of orders) {
     for (const i of o.items) {
@@ -35,6 +35,10 @@ export async function GET(req: NextRequest) {
           esc((JSON.parse(i.modifiersJson) as { name: string }[]).map((m) => m.name).join("; ")),
           (o.totalKurus / 100).toFixed(2),
           o.paymentStatus,
+          o.visit?.paymentMethod ?? "",
+          // "abandoned" marks a table that left without settling — a walkout,
+          // or one staff forgot to close. Worth seeing in the export.
+          o.visit?.closedReason ?? "",
         ].join(",")
       );
     }

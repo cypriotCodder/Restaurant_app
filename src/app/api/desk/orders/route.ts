@@ -16,7 +16,13 @@ export async function GET(req: Request) {
         : { status: { in: ["received", "accepted", "preparing", "ready"] } }),
     },
     orderBy: { createdAt: "asc" },
-    include: { items: true, table: true, session: true, deliveries: true },
+    include: {
+      items: { where: { voidedAt: null } },
+      table: true,
+      session: true,
+      deliveries: true,
+      edits: { orderBy: { createdAt: "asc" } },
+    },
   });
 
   // First order of a brand-new session gets a visual "new session" flag on
@@ -38,11 +44,18 @@ export async function GET(req: Request) {
       tableId: o.tableId,
       newSession: sessionFirstOrder.get(o.sessionId) === o.id,
       posStatus: o.deliveries[0]?.status ?? null,
+      // The line id is what an edit targets, so the desk needs it.
       items: o.items.map((i) => ({
+        id: i.id,
         name: i.nameSnapshot,
         qty: i.qty,
         note: i.note,
         modifiers: (JSON.parse(i.modifiersJson) as { name: string }[]).map((m) => m.name),
+      })),
+      edits: o.edits.map((e) => ({
+        staffName: e.staffName,
+        afterPrint: e.afterPrint,
+        changes: JSON.parse(e.changesJson) as { name: string; fromQty: number; toQty: number }[],
       })),
     })),
   });

@@ -20,8 +20,6 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@vercel/functions", () => ({ waitUntil: () => {} }));
-
 const { sweepPosDeliveries, CLAIM_TIMEOUT_MS, MAX_ATTEMPTS } = await import("@/lib/pos/outbox");
 
 type Where = Record<string, unknown>;

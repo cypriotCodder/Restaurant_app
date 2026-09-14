@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { put } from "@vercel/blob";
 import { requireStaff } from "@/lib/staffAuth";
+import { getStorage } from "@/lib/storage";
 
-// Menu photo upload → Vercel Blob. Previously written to public/uploads, which
-// does not survive on serverless: the filesystem is per-invocation, so an
-// uploaded photo vanished on the next deploy (or simply the next request).
+// Menu photo upload. Photos are written to UPLOAD_DIR on the venue's disk —
+// deliberately outside the application directory, so an app update cannot
+// delete them — and read back through /api/media. See src/lib/storage.
 export async function POST(req: NextRequest) {
   const staff = await requireStaff("admin");
   if (!staff) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -20,10 +20,10 @@ export async function POST(req: NextRequest) {
   // overwrite another's.
   const key = `menu/${staff.venueId}/${randomBytes(8).toString("hex")}${ext}`;
   try {
-    const blob = await put(key, file, { access: "public", contentType: file.type });
-    return NextResponse.json({ ok: true, url: blob.url });
+    const stored = await getStorage().put(key, file, file.type);
+    return NextResponse.json({ ok: true, url: stored.url });
   } catch (err) {
-    console.error("blob upload failed:", err);
+    console.error("upload failed:", err);
     return NextResponse.json({ error: "upload_failed" }, { status: 502 });
   }
 }

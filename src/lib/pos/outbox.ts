@@ -1,4 +1,3 @@
-import { waitUntil } from "@vercel/functions";
 import { db } from "../db";
 import { getAdapter } from "./adapters";
 import type { Ticket } from "./types";
@@ -16,19 +15,17 @@ export const CLAIM_TIMEOUT_MS = 60_000;
  * Called when the desk ACCEPTS an order: writes the outbox row (with the
  * pre-rendered payload) and immediately tries push-based delivery. Failures
  * never propagate — the order already reached the desk dashboard.
- *
- * Awaiting this is the caller's choice, but the returned promise MUST be handed
- * to waitUntil (see the desk route): on serverless the instance is free to
- * freeze the moment the response is returned, which would kill the write and
- * the delivery attempt mid-flight.
  */
-export async function enqueuePosDelivery(orderId: string): Promise<void> {
+export async function enqueuePosDelivery(
+  orderId: string,
+  amendment?: Ticket["amendment"]
+): Promise<void> {
   try {
     const order = await db.order.findUniqueOrThrow({
       where: { id: orderId },
-      include: { items: true, table: true, venue: true },
+      include: { items: { where: { voidedAt: null } }, table: true, venue: true },
     });
-    const ticket = ticketFor(order);
+    const ticket = { ...ticketFor(order), amendment };
     const adapter = getAdapter(order.venue.posAdapter);
     const delivery = await db.posDelivery.create({
       data: {
@@ -51,7 +48,7 @@ function ticketFor(order: {
   number: number;
   createdAt: Date;
   totalKurus: number;
-  venue: { name: string };
+  venue: { name: string; currency: string };
   table: { name: string };
   items: {
     qty: number;
@@ -63,6 +60,7 @@ function ticketFor(order: {
 }): Ticket {
   return {
     venueName: order.venue.name,
+    currency: order.venue.currency,
     tableName: order.table.name,
     orderNumber: order.number,
     createdAt: order.createdAt,
@@ -102,8 +100,8 @@ async function attemptDelivery(deliveryId: string, ticket: Ticket): Promise<void
         status: attempts >= MAX_ATTEMPTS ? "failed" : "pending",
       },
     });
-    // No in-process retry timer here by design: a setTimeout does not survive
-    // the instance freezing after the response. Retries belong to the sweep.
+    // Retries belong to the sweep rather than a timer here, so that a delivery
+    // is retried even if the process restarts between attempts.
   }
 }
 
@@ -154,14 +152,25 @@ export async function sweepPosDeliveries(): Promise<SweepResult> {
   return { reclaimed: reclaimed + reclaimedNullish, retried: retryable.length, exhausted };
 }
 
-/** Fire-and-forget wrapper that survives the instance freezing after a response. */
-export function enqueuePosDeliveryInBackground(orderId: string): void {
-  const work = enqueuePosDelivery(orderId).catch((err) =>
-    console.error("POS enqueue rejected:", err)
+/**
+ * Sends an amendment ticket for an order the kitchen already has paper for.
+ * Marked so a cook cannot mistake it for a second order.
+ */
+export function enqueueAmendmentInBackground(
+  orderId: string,
+  amendment: NonNullable<Ticket["amendment"]>
+): void {
+  void enqueuePosDelivery(orderId, amendment).catch((err) =>
+    console.error("POS amendment rejected:", err)
   );
-  try {
-    waitUntil(work);
-  } catch {
-    // No request context (scripts, tests) — nothing is freezing the process.
-  }
+}
+
+/**
+ * Fire-and-forget: the desk gets its response immediately and the ticket makes
+ * its own way to the printer. Safe to leave running here because this is a
+ * long-lived server — the process is not torn down when the response returns —
+ * and the sweep picks up anything this misses.
+ */
+export function enqueuePosDeliveryInBackground(orderId: string): void {
+  void enqueuePosDelivery(orderId).catch((err) => console.error("POS enqueue rejected:", err));
 }

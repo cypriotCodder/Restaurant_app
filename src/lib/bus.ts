@@ -1,97 +1,43 @@
 import { EventEmitter } from "events";
-import Redis from "ioredis";
-import { waitUntil } from "@vercel/functions";
 
-// Cross-instance pub/sub feeding the SSE endpoints.
+// In-process event bus feeding the SSE endpoints.
 //
-// Serverless runs many instances, so an in-process EventEmitter alone would
-// only ever reach the clients attached to whichever instance happened to
-// serve the write. Events therefore go out over Redis, and every instance —
-// *including the publisher* — receives them back through its subscriber and
-// fans them out locally to its own open SSE handlers. That round trip is why
-// publish() must not emit locally as well: doing both would double-deliver.
+// The app runs as a single long-lived server on the venue's own machine, so a
+// plain EventEmitter is the whole mechanism: a write and every open SSE stream
+// live in the same process. (The earlier serverless deployment needed Redis
+// pub/sub here, because a write on one instance could not otherwise reach
+// clients attached to another.)
 //
-// With REDIS_URL unset (tests, CI, a bare local run) this degrades to the
-// original single-process behaviour instead of failing.
+// If this ever runs as more than one process behind a load balancer, this is
+// the file that has to change — events would stop crossing between them, and
+// a desk on process A would go quiet for orders placed on process B.
 
-// tableId rides on the order events so a customer stream can reject an event
-// for another table from the event itself. Without it every connected phone in
-// the venue had to load the order from the database just to discover the event
-// was not theirs — one query per connection per event.
 export type BusEvent =
+  // tableId rides on the order events so a customer stream can reject an event
+  // for another table from the event itself, without loading the order.
   | { type: "order.created"; venueId: string; orderId: string; sessionId: string; tableId: string }
   | { type: "order.updated"; venueId: string; orderId: string; sessionId: string; tableId: string }
   | { type: "menu.changed"; venueId: string }
-  | { type: "session.revoked"; venueId: string; sessionId: string };
+  | { type: "session.revoked"; venueId: string; sessionId: string }
+  // Bill lifecycle. tableId rides along so the desk can highlight the table
+  // and a customer stream can filter without a database read.
+  | { type: "bill.requested"; venueId: string; visitId: string; tableId: string }
+  | { type: "bill.updated"; venueId: string; visitId: string; tableId: string }
+  | { type: "visit.closed"; venueId: string; visitId: string; tableId: string };
 
-const CHANNEL = "masadan:bus";
-
-// Cached on globalThis in every environment, not just dev: a warm serverless
-// instance reuses this module across invocations, and reconnecting per request
-// would burn through the provider's connection limit.
-const globalForBus = globalThis as unknown as {
-  busEmitter?: EventEmitter;
-  busPublisher?: Redis;
-  busSubscriber?: Redis;
-};
+// Cached on globalThis so a dev hot reload does not orphan existing listeners.
+const globalForBus = globalThis as unknown as { busEmitter?: EventEmitter };
 
 const emitter = (globalForBus.busEmitter ??= new EventEmitter());
+// One venue's phones and desk screens can hold a lot of streams open at once;
+// the default limit of 10 would log spurious leak warnings.
 emitter.setMaxListeners(500);
 
-const redisUrl = process.env.REDIS_URL;
-
-function connect(): Redis {
-  // A dropped stream must not take the process down; ioredis reconnects on
-  // its own and the SSE clients re-sync on their next reconnect anyway.
-  const client = new Redis(redisUrl!, { maxRetriesPerRequest: null, lazyConnect: true });
-  client.on("error", (err) => console.error("bus redis:", err.message));
-  return client;
-}
-
-function publisher(): Redis {
-  return (globalForBus.busPublisher ??= connect());
-}
-
-/** Idempotent: the first subscriber on this instance opens the Redis stream. */
-function ensureSubscriber(): void {
-  if (globalForBus.busSubscriber) return;
-  const sub = connect();
-  globalForBus.busSubscriber = sub;
-  sub.subscribe(CHANNEL).catch((err) => console.error("bus subscribe:", err.message));
-  sub.on("message", (channel, raw) => {
-    if (channel !== CHANNEL) return;
-    try {
-      emitter.emit("event", JSON.parse(raw) as BusEvent);
-    } catch {
-      // A malformed payload is not worth killing the stream over.
-    }
-  });
-}
-
-export function publish(event: BusEvent) {
-  if (!redisUrl) {
-    emitter.emit("event", event);
-    return;
-  }
-  // Not awaited, so callers keep their fire-and-forget signature — but the
-  // promise is handed to waitUntil, because otherwise the platform is free to
-  // freeze the instance the moment the route returns its response. That kills
-  // the in-flight PUBLISH (which on a cold instance still has a TLS handshake
-  // to finish) and the event is silently lost. Outside Vercel waitUntil is a
-  // no-op wrapper, so local and test runs are unaffected.
-  const sent = publisher()
-    .publish(CHANNEL, JSON.stringify(event))
-    .catch((err) => console.error("bus publish:", err.message));
-  try {
-    waitUntil(sent);
-  } catch {
-    // No request context (scripts, tests) — the promise still settles there
-    // because nothing is freezing the process.
-  }
+export function publish(event: BusEvent): void {
+  emitter.emit("event", event);
 }
 
 export function subscribe(handler: (event: BusEvent) => void): () => void {
-  if (redisUrl) ensureSubscriber();
   emitter.on("event", handler);
   return () => emitter.off("event", handler);
 }

@@ -4,6 +4,8 @@ import { requireStaff } from "@/lib/staffAuth";
 import { publish } from "@/lib/bus";
 import { enqueuePosDeliveryInBackground } from "@/lib/pos/outbox";
 
+// `cancelled` is absent by design: it is the customer's own withdrawal and is
+// terminal. Staff refusing an order use `rejected`, which carries a reason.
 const transitions: Record<string, string[]> = {
   received: ["accepted", "rejected"],
   accepted: ["preparing", "ready", "rejected"],

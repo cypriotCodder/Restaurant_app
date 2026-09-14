@@ -3,9 +3,8 @@ import { sseResponse } from "@/lib/sse";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-// Hold the stream for the platform maximum; EventSource reconnects by itself
-// when the function is torn down at the cap.
-export const maxDuration = 300;
+// No duration cap: this is a long-lived server, so the stream stays open for
+// the whole sitting instead of being torn down and reconnected every 5 minutes.
 
 // Customer live channel: status changes for this table's orders + menu
 // availability changes (86'd items disappear mid-browse).
@@ -21,11 +20,24 @@ export async function GET() {
     // *relevant* event rather than one per connection per event.
     (e) => {
       if (e.venueId !== venueId) return false;
-      if (e.type === "order.created" || e.type === "order.updated") return e.tableId === tableId;
+      if (
+        e.type === "order.created" ||
+        e.type === "order.updated" ||
+        e.type === "bill.requested" ||
+        e.type === "bill.updated" ||
+        e.type === "visit.closed"
+      ) {
+        return e.tableId === tableId;
+      }
       return e.type === "menu.changed";
     },
     async (e) => {
       if (e.type === "menu.changed") return { type: "menu.changed" };
+      // The party's table was settled and their sessions revoked: the phone
+      // should show the "thanks, re-scan to order again" state immediately
+      // rather than discovering it on the next failed request.
+      if (e.type === "visit.closed") return { type: "visit.closed" };
+      if (e.type === "bill.requested" || e.type === "bill.updated") return { type: "bill.updated" };
       if (e.type === "order.created" || e.type === "order.updated") {
         const order = await db.order.findUnique({
           where: { id: e.orderId },

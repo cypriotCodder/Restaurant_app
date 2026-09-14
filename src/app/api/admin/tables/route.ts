@@ -3,16 +3,17 @@ import { randomBytes } from "crypto";
 import { db } from "@/lib/db";
 import { requireStaff } from "@/lib/staffAuth";
 import { tableQrUrl } from "@/lib/qr";
+import { baseUrl } from "@/lib/env";
 
 function newTableCode(): string {
   return randomBytes(6).toString("base64url");
 }
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const staff = await requireStaff("admin");
   if (!staff) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const venue = await db.venue.findUniqueOrThrow({ where: { id: staff.venueId } });
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? req.nextUrl.origin;
+  const origin = baseUrl();
   const tables = await db.table.findMany({
     where: { venueId: staff.venueId },
     orderBy: { createdAt: "asc" },
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
       name: t.name,
       active: t.active,
       qrVersion: t.qrVersion,
-      qrUrl: tableQrUrl(baseUrl, venue.qrSecret, t.code, t.qrVersion),
+      qrUrl: tableQrUrl(origin, venue.qrSecret, t.code, t.qrVersion),
       activeSessions: t.sessions,
     })),
   });

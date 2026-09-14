@@ -6,14 +6,18 @@ Customers scan a QR at their table, browse the menu on their phone (no app, no a
 
 ```bash
 npm install
-vercel env pull .env.local   # Neon + Upstash + Blob credentials
+cp .env.example .env.local   # then fill in DATABASE_URL and the two secrets
 npm run migrate:deploy       # apply migrations to Postgres
 npm run seed                 # venue: menu, 8 tables, staff users, bridge key
 npm run dev                  # http://localhost:3000
 ```
 
-`.env.local` is the source of truth for service credentials and is gitignored; `prisma.config.ts`
-loads it so the Prisma CLI targets the same database the app does.
+`.env.local` holds local credentials and is gitignored; `prisma.config.ts` loads it so
+the Prisma CLI targets the same database the app does.
+
+The app is **self-hosted**: it runs as a single long-lived Node server on the venue's
+own machine, with Postgres beside it and no managed cloud services.
+To install it in a restaurant, see **[ONPREM_SETUP.md](ONPREM_SETUP.md)**.
 
 ### Staff / Admin Credentials
 
@@ -61,14 +65,42 @@ BASE_URL=https://your-app BRIDGE_KEY=<see seed output> PRINTER_HOST=192.168.1.50
 
 The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP only, and prints to the same network kitchen printer (port 9100) AKINSOFT prints to. Failed prints show a "YAZICI HATASI" badge on the desk — nothing is ever silently lost. Deeper AKINSOFT integration (Wolvox local import surface, or Entegra-style middleware) slots in as another adapter once the venue's exact module/license is confirmed.
 
+## Testing on a phone
+
+The dev server must be reachable at an address the phone can dial, and that
+address changes with every network. One command re-points it and prints the
+live scan URLs:
+
+```bash
+npm run dev:origin     # detect this machine's LAN IP, rewrite .env, list URLs
+npm run dev            # restart for the new origin to take effect
+```
+
+Two things commonly stop a phone reaching it, neither of them app bugs:
+
+- **Client isolation** on café, hotel and ISP guest networks blocks
+  device-to-device traffic entirely. Test with `http://<ip>:3000/api/health` —
+  plain JSON, no JavaScript. If that fails, the network is the problem. A
+  personal hotspot is the quickest way around it.
+- **`.local` hostnames** rely on mDNS. They resolve to loopback on the machine
+  itself, so a laptop test proves nothing about a phone.
+
+## Work log
+
+Each change to this project is recorded in **[WORKLOG.md](WORKLOG.md)** — what
+was asked, what changed, why the non-obvious calls were made that way, and the
+evidence that it works. Newest entry first.
+
 ## Stack & notes
 
-Next.js App Router (TS) · Prisma 6 + **Neon Postgres** (pooled `DATABASE_URL` at runtime, unpooled `DATABASE_URL_UNPOOLED` for migrations) · SSE for realtime over **Upstash Redis pub/sub**, so events reach every serverless instance rather than only the one that served the write · menu photos on **Vercel Blob** · Tailwind. Multi-tenant: all data is venue-scoped. Money is stored as kuruş integers. Orders snapshot item names/prices. Payment is pay-at-till; `paymentStatus/Provider/Ref` fields are already on `Order` for a later PSP (iyzico/PayTR) integration.
+Next.js App Router (TS) · Prisma 6 + **PostgreSQL** on the same machine · SSE for realtime over an **in-process event bus**, which is all a single server needs · menu photos on **local disk** (`UPLOAD_DIR`, served via `/api/media`) · POS sweep and data retention on an **in-process scheduler** · Tailwind. Runtime dependencies are Node, Postgres and nothing else. Multi-tenant: all data is venue-scoped. Money is stored as kuruş integers. Orders snapshot item names/prices. Payment is pay-at-till; `paymentStatus/Provider/Ref` fields are already on `Order` for a later PSP (iyzico/PayTR) integration.
 
-`src/lib/env.ts` validates the environment at boot (via `instrumentation.ts`). There are no fallbacks:
-a deployment missing `AUTH_SECRET`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `REDIS_URL`,
-`BLOB_READ_WRITE_TOKEN`, `CRON_SECRET` or `NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured.
-`REDIS_URL` must be the `rediss://` endpoint — the Upstash REST API cannot `SUBSCRIBE`.
+**One process is assumed.** The event bus and the login rate limiter are in-memory, so running two app processes behind a load balancer would silently break live updates between them.
+
+`src/lib/env.ts` validates the environment at boot (via `src/instrumentation.ts`). There are no
+fallbacks: an install missing `AUTH_SECRET`, `DATABASE_URL`, `CRON_SECRET` or
+`NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured. `UPLOAD_DIR`
+defaults to `/var/lib/masadan/uploads`.
 
 ## Release gate: NEXT_PUBLIC_BASE_URL
 

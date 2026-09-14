@@ -1,83 +1,68 @@
-import Redis from "ioredis";
-
-// Fixed-window rate limiter for endpoints that are not otherwise throttled by
-// the table-session rules — principally staff login, which is an unauthenticated
-// bcrypt oracle and the one abuse path the session design does not cover.
+// Fixed-window rate limiter for endpoints the table-session rules do not cover
+// — principally staff login, which is an unauthenticated bcrypt oracle.
 //
-// Backed by Redis so the limit holds across serverless instances. With
-// REDIS_URL unset (tests, CI, a bare local run) it degrades to a per-process
-// in-memory window rather than failing, matching how src/lib/bus.ts behaves.
+// The app is a single long-lived process on the venue's own machine, so the
+// counters live in memory: there is no second instance for a shared store to
+// synchronise with.
+//
+// Counters reset when the server restarts. That is an acceptable trade for one
+// venue — an attacker cannot force a restart, and a restart mid-attack costs
+// them the window they had already burned.
 
-const globalForLimiter = globalThis as unknown as {
-  limiterRedis?: Redis;
-  limiterMemory?: Map<string, { count: number; resetAt: number }>;
-};
+type Window = { count: number; resetAt: number };
 
-const redisUrl = process.env.REDIS_URL;
+const globalForLimiter = globalThis as unknown as { limiterMemory?: Map<string, Window> };
+const windows = (globalForLimiter.limiterMemory ??= new Map<string, Window>());
 
-function client(): Redis {
-  return (globalForLimiter.limiterRedis ??= (() => {
-    const c = new Redis(redisUrl!, { maxRetriesPerRequest: 2, lazyConnect: true });
-    c.on("error", (err) => console.error("ratelimit redis:", err.message));
-    return c;
-  })());
-}
-
-function memory(): Map<string, { count: number; resetAt: number }> {
-  return (globalForLimiter.limiterMemory ??= new Map());
-}
+// Bounds memory if a large number of distinct keys is ever seen. Expired
+// entries are dropped first, so this only bites under a deliberate flood.
+const MAX_KEYS = 10_000;
 
 export type RateLimitResult = { allowed: boolean; remaining: number; retryAfterSec: number };
+
+function evictExpired(now: number): void {
+  for (const [key, w] of windows) {
+    if (w.resetAt <= now) windows.delete(key);
+  }
+}
 
 /**
  * Counts one hit against `key`. Returns allowed=false once `limit` hits have
  * landed inside the current `windowSec` window.
- *
- * Fails OPEN: if Redis is unreachable the request is allowed through, because
- * losing the cache must not lock every staff member out of the desk mid-service.
  */
-export async function rateLimit(
-  key: string,
-  limit: number,
-  windowSec: number
-): Promise<RateLimitResult> {
+export function rateLimit(key: string, limit: number, windowSec: number): RateLimitResult {
+  const now = Date.now();
   const namespaced = `rl:${key}`;
+  const entry = windows.get(namespaced);
 
-  if (!redisUrl) {
-    const now = Date.now();
-    const entry = memory().get(namespaced);
-    if (!entry || entry.resetAt <= now) {
-      memory().set(namespaced, { count: 1, resetAt: now + windowSec * 1000 });
-      return { allowed: true, remaining: limit - 1, retryAfterSec: 0 };
-    }
-    entry.count += 1;
-    const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
-    return {
-      allowed: entry.count <= limit,
-      remaining: Math.max(0, limit - entry.count),
-      retryAfterSec,
-    };
+  if (!entry || entry.resetAt <= now) {
+    if (windows.size >= MAX_KEYS) evictExpired(now);
+    windows.set(namespaced, { count: 1, resetAt: now + windowSec * 1000 });
+    return { allowed: true, remaining: limit - 1, retryAfterSec: 0 };
   }
 
-  try {
-    const c = client();
-    // INCR then EXPIRE-on-first-hit is the standard fixed window: the TTL is
-    // set only when the counter is created, so the window does not slide.
-    const count = await c.incr(namespaced);
-    if (count === 1) await c.expire(namespaced, windowSec);
-    const ttl = count === 1 ? windowSec : await c.ttl(namespaced);
-    return {
-      allowed: count <= limit,
-      remaining: Math.max(0, limit - count),
-      retryAfterSec: ttl > 0 ? ttl : windowSec,
-    };
-  } catch (err) {
-    console.error("ratelimit failed open:", (err as Error).message);
-    return { allowed: true, remaining: limit, retryAfterSec: 0 };
-  }
+  entry.count += 1;
+  return {
+    allowed: entry.count <= limit,
+    remaining: Math.max(0, limit - entry.count),
+    retryAfterSec: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+  };
 }
 
-/** Best-effort client IP from the proxy chain; "" when it cannot be determined. */
+/** Forget one key's window — used to refund a budget after a legitimate success. */
+export function clearRateLimit(key: string): void {
+  windows.delete(`rl:${key}`);
+}
+
+/** Test seam: clear every window. */
+export function resetRateLimits(): void {
+  windows.clear();
+}
+
+/**
+ * Best-effort client IP. Behind the venue's reverse proxy this is the
+ * X-Forwarded-For the proxy sets; "" when it cannot be determined.
+ */
 export function clientIp(req: Request): string {
   return (
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||

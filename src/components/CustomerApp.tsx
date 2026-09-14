@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t, statusLabel, type Locale } from "@/lib/i18n";
 import { formatKurus } from "@/lib/money";
+import { CurrencyProvider, useMoney } from "./MoneyContext";
 
 // ---------- types mirrored from the API ----------
 type Option = { id: string; nameTr: string; nameEn: string; priceDeltaKurus: number };
@@ -53,6 +54,7 @@ const statusTagClass: Record<string, string> = {
   ready: "tag-outline",
   served: "tag-neutral",
   rejected: "tag-neutral",
+  cancelled: "tag-neutral",
 };
 
 /** Random per-submission key; crypto.randomUUID is unavailable on http origins. */
@@ -61,11 +63,25 @@ function newIdempotencyKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+type CustomerBill = {
+  status: string;
+  billRequested: boolean;
+  totalKurus: number;
+  yourTotalKurus: number;
+  phoneCount: number;
+  lines: { name: string; qty: number; lineTotalKurus: number; note: string; modifiers: string[] }[];
+};
+
 export default function CustomerApp({ code }: { code: string }) {
   const [locale, setLocale] = useState<Locale>("tr");
   const [menu, setMenu] = useState<Menu | null>(null);
   const [expired, setExpired] = useState(false);
-  const [tab, setTab] = useState<"menu" | "orders">("menu");
+  const [tab, setTab] = useState<"menu" | "orders" | "bill">("menu");
+  const [bill, setBill] = useState<CustomerBill | null>(null);
+  const [requestingBill, setRequestingBill] = useState(false);
+  // Set when staff settle the table: the party has paid and their phones are
+  // revoked, so the app shows a thank-you rather than a scary "session expired".
+  const [settled, setSettled] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [selected, setSelected] = useState<Item | null>(null);
@@ -97,6 +113,12 @@ export default function CustomerApp({ code }: { code: string }) {
     if (res.ok) setOrders((await res.json()).orders);
   }, []);
 
+  const loadBill = useCallback(async () => {
+    const res = await fetch("/api/bill");
+    if (res.status === 401) return setExpired(true);
+    if (res.ok) setBill(await res.json());
+  }, []);
+
   // Restore the cart that survived a re-scan. This has to stay a synchronous
   // post-mount effect: localStorage does not exist during SSR, so hydrating it
   // in a useState initializer would make the server and client first renders
@@ -115,9 +137,9 @@ export default function CustomerApp({ code }: { code: string }) {
 
   useEffect(() => {
     (async () => {
-      await Promise.all([loadMenu(), loadOrders()]);
+      await Promise.all([loadMenu(), loadOrders(), loadBill()]);
     })();
-  }, [loadMenu, loadOrders]);
+  }, [loadMenu, loadOrders, loadBill]);
 
   useEffect(() => {
     try {
@@ -134,11 +156,53 @@ export default function CustomerApp({ code }: { code: string }) {
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === "menu.changed") loadMenu();
-        if (msg.type === "order.updated") loadOrders();
+        if (msg.type === "order.updated") { loadOrders(); loadBill(); }
+        if (msg.type === "bill.updated") loadBill();
+        // Staff closed the table at the till.
+        if (msg.type === "visit.closed") setSettled(true);
       } catch {}
     };
     return () => es.close();
-  }, [loadMenu, loadOrders]);
+  }, [loadMenu, loadOrders, loadBill]);
+
+  const [cancelling, setCancelling] = useState<string | null>(null);
+
+  async function cancelOrder(orderId: string) {
+    if (cancelling) return;
+    if (!confirm(t(locale, "confirmCancelOrder"))) return;
+    setCancelling(orderId);
+    const res = await fetch(`/api/orders/${orderId}/cancel`, { method: "POST" }).catch(() => null);
+    setCancelling(null);
+    if (res?.ok) {
+      await Promise.all([loadOrders(), loadBill()]);
+      return;
+    }
+    if (res?.status === 401) return setExpired(true);
+    // 409 means the desk accepted it between the list rendering and the tap.
+    setToast(t(locale, res?.status === 409 ? "cancelTooLate" : "cancelFailed"));
+    setTimeout(() => setToast(""), 6000);
+    await loadOrders();
+  }
+
+  async function askForBill() {
+    if (requestingBill || bill?.billRequested) return;
+    setRequestingBill(true);
+    const res = await fetch("/api/bill", { method: "POST" }).catch(() => null);
+    setRequestingBill(false);
+    if (res?.ok) {
+      await loadBill();
+      setToast(t(locale, "billRequested"));
+      setTimeout(() => setToast(""), 6000);
+    } else if (res?.status === 401) {
+      setExpired(true);
+    }
+  }
+
+  // Prices render in the venue's own currency, which arrives with the menu.
+  const money = useCallback(
+    (kurus: number) => formatKurus(kurus, menu?.venue.currency ?? "TRY"),
+    [menu?.venue.currency]
+  );
 
   // ---------- cart math ----------
   const itemById = useMemo(() => {
@@ -197,6 +261,7 @@ export default function CustomerApp({ code }: { code: string }) {
       setToast(`${t(locale, "orderSubmitted")} ${t(locale, "orderNumber")}${data.number} — ${t(locale, "payAtTill")}`);
       setTab("orders");
       loadOrders();
+      loadBill();
       setTimeout(() => setToast(""), 5000);
     } else if (res.status === 401) {
       setExpired(true); // cart stays in localStorage; survives the re-scan
@@ -211,6 +276,21 @@ export default function CustomerApp({ code }: { code: string }) {
       setToast(t(locale, "orderFailed"));
       setTimeout(() => setToast(""), 5000);
     }
+  }
+
+  // A settled table is a happy ending, not an error — show it as one.
+  if (settled) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-6" style={{ background: "var(--color-bg)" }}>
+        <div className="text-center flex flex-col items-center gap-3">
+          <div className="h-3 w-3 rounded-full" style={{ background: "var(--color-accent)" }} />
+          <h1 className="wordmark text-2xl">{t(locale, "visitClosedTitle")}</h1>
+          <p className="text-sm max-w-xs" style={{ color: "var(--color-neutral-900)" }}>
+            {t(locale, "visitClosedBody")}
+          </p>
+        </div>
+      </main>
+    );
   }
 
   if (expired) {
@@ -244,6 +324,7 @@ export default function CustomerApp({ code }: { code: string }) {
   }
 
   return (
+    <CurrencyProvider currency={menu.venue.currency}>
     <div className="flex-1 flex flex-col max-w-lg w-full mx-auto pb-24">
       {/* header */}
       <header className="sticky top-0 z-20 backdrop-blur border-b-2 px-4 py-3" style={{ background: "color-mix(in srgb, var(--color-bg) 95%, transparent)", borderColor: "var(--color-divider)" }}>
@@ -270,15 +351,19 @@ export default function CustomerApp({ code }: { code: string }) {
         </div>
         {/* tabs */}
         <div className="seg mt-3" role="tablist">
-          {(["menu", "orders"] as const).map((tb) => (
+          {(["menu", "orders", "bill"] as const).map((tb) => (
             <button
               key={tb}
               role="tab"
               aria-selected={tab === tb}
-              onClick={() => { setTab(tb); if (tb === "orders") loadOrders(); }}
+              onClick={() => {
+                setTab(tb);
+                if (tb === "orders") loadOrders();
+                if (tb === "bill") loadBill();
+              }}
               className={`seg-opt ${tab === tb ? "on" : ""}`}
             >
-              {tb === "menu" ? t(locale, "menu") : t(locale, "myOrders")}
+              {tb === "menu" ? t(locale, "menu") : tb === "orders" ? t(locale, "myOrders") : t(locale, "bill")}
             </button>
           ))}
         </div>
@@ -343,7 +428,7 @@ export default function CustomerApp({ code }: { code: string }) {
                         {!i.available && <span className="tag tag-neutral mt-1 text-[10px]">{t(locale, "unavailable")}</span>}
                       </div>
                       <div className="menu-card-footer">
-                        <span className="menu-card-price">{formatKurus(i.priceKurus)}</span>
+                        <span className="menu-card-price">{money(i.priceKurus)}</span>
                         {i.available && (
                           <span className="menu-card-add" aria-label={t(locale, "addToCart")}>+</span>
                         )}
@@ -386,10 +471,98 @@ export default function CustomerApp({ code }: { code: string }) {
                   </li>
                 ))}
               </ul>
-              <p className="text-right font-bold mt-2">{formatKurus(o.totalKurus)}</p>
+              <div className="flex items-center justify-between mt-2 gap-3">
+                {/* Only your own order, and only while the kitchen has not
+                    taken it — after that it has to go through staff. */}
+                {o.mine && o.status === "received" ? (
+                  <button
+                    onClick={() => cancelOrder(o.id)}
+                    disabled={cancelling === o.id}
+                    className="btn btn-ghost text-sm"
+                  >
+                    {cancelling === o.id ? "..." : t(locale, "cancelOrder")}
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <p className="text-right font-bold">{money(o.totalKurus)}</p>
+              </div>
             </div>
           ))}
           <p className="text-center text-xs mt-2" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "payAtTill")}</p>
+        </div>
+      )}
+
+      {tab === "bill" && (
+        <div className="px-4 pt-4 flex flex-col gap-3 pb-28">
+          {(!bill || bill.lines.length === 0) && (
+            <p className="text-center pt-10" style={{ color: "var(--color-neutral-900)" }}>
+              {t(locale, "empty")}
+            </p>
+          )}
+
+          {bill && bill.lines.length > 0 && (
+            <>
+              <div className="card">
+                <h2 className="wordmark text-base mb-3">{t(locale, "tableTotal")}</h2>
+                <ul className="text-sm flex flex-col gap-2">
+                  {bill.lines.map((l, i) => (
+                    <li key={i} className="flex justify-between gap-3">
+                      <span>
+                        {l.qty} × {l.name}
+                        {l.modifiers.length > 0 && (
+                          <span style={{ color: "var(--color-neutral-900)" }}> ({l.modifiers.join(", ")})</span>
+                        )}
+                        {l.note && <span style={{ color: "var(--color-accent-700)" }}> — {l.note}</span>}
+                      </span>
+                      <span className="shrink-0">{money(l.lineTotalKurus)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div
+                  className="flex justify-between font-bold text-lg mt-3 pt-3"
+                  style={{ borderTop: "2px solid var(--color-text)" }}
+                >
+                  <span>{t(locale, "total")}</span>
+                  <span>{money(bill.totalKurus)}</span>
+                </div>
+
+                {/* Only worth showing when the table actually is shared. */}
+                {bill.phoneCount > 1 && (
+                  <div className="mt-3 pt-3 text-sm" style={{ borderTop: "1px solid var(--color-divider)" }}>
+                    <div className="flex justify-between">
+                      <span style={{ color: "var(--color-neutral-900)" }}>{t(locale, "yourShare")}</span>
+                      <span className="font-bold">{money(bill.yourTotalKurus)}</span>
+                    </div>
+                    <p className="text-xs mt-1" style={{ color: "var(--color-neutral-900)" }}>
+                      {t(locale, "sharedTable").replace("{n}", String(bill.phoneCount))}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-center px-4" style={{ color: "var(--color-neutral-900)" }}>
+                {t(locale, "billNote")}
+              </p>
+
+              {bill.billRequested ? (
+                <p
+                  className="text-center text-sm font-bold py-4"
+                  style={{ color: "var(--color-accent-700)" }}
+                >
+                  {t(locale, "billRequestedShort")}
+                </p>
+              ) : (
+                <button
+                  onClick={askForBill}
+                  disabled={requestingBill}
+                  className="btn btn-primary w-full justify-center py-4 text-sm"
+                >
+                  {requestingBill ? "..." : t(locale, "requestBill")}
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -401,7 +574,7 @@ export default function CustomerApp({ code }: { code: string }) {
           style={{ background: "var(--color-text)", color: "var(--color-bg)" }}
         >
           <span className="font-medium">
-            {cartCount} {cartCount === 1 ? "item" : "items"} · {formatKurus(cartTotal)}
+            {cartCount} {cartCount === 1 ? "item" : "items"} · {money(cartTotal)}
           </span>
           <span className="font-bold flex items-center gap-1" style={{ color: "var(--color-accent-200)" }}>
             {locale === "en" ? "View cart" : "Sepeti gör"} →
@@ -472,7 +645,7 @@ export default function CustomerApp({ code }: { code: string }) {
                           +
                         </button>
                       </div>
-                      <p className="font-bold shrink-0">{formatKurus(lineTotal(line))}</p>
+                      <p className="font-bold shrink-0">{money(lineTotal(line))}</p>
                     </li>
                   );
                 })}
@@ -481,11 +654,11 @@ export default function CustomerApp({ code }: { code: string }) {
               <div className="mt-4 flex flex-col gap-1 text-sm" style={{ borderTop: "2px solid var(--color-text)", paddingTop: "12px" }}>
                 <div className="flex justify-between">
                   <span>{locale === "en" ? "Subtotal" : "Ara Toplam / Subtotal"}</span>
-                  <span>{formatKurus(cartTotal)}</span>
+                  <span>{money(cartTotal)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-lg mt-2">
                   <span>{locale === "en" ? "Total" : "Toplam / Total"}</span>
-                  <span>{formatKurus(cartTotal)}</span>
+                  <span>{money(cartTotal)}</span>
                 </div>
               </div>
               <p className="text-xs mt-3 mb-3" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "payAtTill")}</p>
@@ -503,6 +676,7 @@ export default function CustomerApp({ code }: { code: string }) {
         </Sheet>
       )}
     </div>
+    </CurrencyProvider>
   );
 }
 
@@ -535,6 +709,7 @@ function ItemSheet({
   onClose: () => void;
   onAdd: (line: CartLine) => void;
 }) {
+  const money = useMoney();
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [optionIds, setOptionIds] = useState<string[]>([]);
@@ -583,7 +758,7 @@ function ItemSheet({
       {(locale === "en" ? item.descEn : item.descTr) && (
         <p className="mt-1" style={{ color: "var(--color-neutral-900)" }}>{locale === "en" ? item.descEn : item.descTr}</p>
       )}
-      <p className="font-extrabold text-xl mt-2">{formatKurus(item.priceKurus)}</p>
+      <p className="font-extrabold text-xl mt-2">{money(item.priceKurus)}</p>
       {item.tags.length > 0 && <p className="text-xs mt-1" style={{ color: "var(--color-neutral-900)" }}>{item.tags.join(" · ")}</p>}
 
       {item.modifierGroups.map((g) => (
@@ -606,7 +781,7 @@ function ItemSheet({
                   className={`seg-opt ${optionIds.includes(o.id) ? "on" : ""}`}
                 >
                   {name(o, locale)}
-                  {o.priceDeltaKurus > 0 && ` +${formatKurus(o.priceDeltaKurus)}`}
+                  {o.priceDeltaKurus > 0 && ` +${money(o.priceDeltaKurus)}`}
                 </button>
               ))}
             </div>
@@ -629,7 +804,7 @@ function ItemSheet({
                     <span>{name(o, locale)}</span>
                   </div>
                   {o.priceDeltaKurus !== 0 && (
-                    <span className="text-sm" style={{ color: "var(--color-neutral-900)" }}>+{formatKurus(o.priceDeltaKurus)}</span>
+                    <span className="text-sm" style={{ color: "var(--color-neutral-900)" }}>+{money(o.priceDeltaKurus)}</span>
                   )}
                 </label>
               ))}
@@ -668,7 +843,7 @@ function ItemSheet({
           }
           className="btn btn-primary flex-1 justify-center py-3.5"
         >
-          {locale === "en" ? "ADD TO CART" : "SEPETE EKLE"} · {formatKurus(unit * qty)}
+          {locale === "en" ? "ADD TO CART" : "SEPETE EKLE"} · {money(unit * qty)}
         </button>
       </div>
     </Sheet>

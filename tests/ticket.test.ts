@@ -7,6 +7,7 @@ import type { Ticket } from "@/lib/pos/types";
 
 const ticket: Ticket = {
   venueName: "The Heaven",
+  currency: "TRY",
   tableName: "Masa 3",
   orderNumber: 42,
   createdAt: new Date("2026-09-10T12:30:00Z"),

@@ -6,6 +6,13 @@ export function renderTicketText(ticket: Ticket): string {
   const W = 32;
   const sep = "-".repeat(W);
   const lines: string[] = [];
+  if (ticket.amendment) {
+    // Loud and first: a cook glancing at the rail must not mistake this for a
+    // new order and cook it a second time.
+    lines.push("*".repeat(W));
+    lines.push(center("DUZELTME / AMENDED", W));
+    lines.push("*".repeat(W));
+  }
   lines.push(center(ticket.venueName.toUpperCase(), W));
   lines.push(center(`*** ${ticket.tableName} ***`, W));
   lines.push(
@@ -18,8 +25,20 @@ export function renderTicketText(ticket: Ticket): string {
     for (const m of l.modifiers) lines.push(`   + ${m}`);
     if (l.note) lines.push(`   ! ${l.note}`);
   }
+  if (ticket.amendment) {
+    lines.push(sep);
+    lines.push("DEGISIKLIK / CHANGES:");
+    for (const c of ticket.amendment.changes) {
+      lines.push(
+        c.toQty === 0
+          ? `  IPTAL/VOID  ${c.name}`
+          : `  ${c.fromQty} -> ${c.toQty}   ${c.name}`
+      );
+    }
+    lines.push(`  (${ticket.amendment.byStaff})`);
+  }
   lines.push(sep);
-  lines.push(`TOPLAM: ${formatKurus(ticket.totalKurus)}`.padStart(W));
+  lines.push(`TOPLAM: ${formatKurus(ticket.totalKurus, ticket.currency)}`.padStart(W));
   lines.push(center("Odeme kasada / Pay at till", W));
   return lines.join("\n");
 }

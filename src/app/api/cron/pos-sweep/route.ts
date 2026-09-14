@@ -4,16 +4,15 @@ import { sweepPosDeliveries } from "@/lib/pos/outbox";
 import { pruneRetainedData } from "@/lib/retention";
 import { getEnv } from "@/lib/env";
 
-// Outbox reconciliation. Vercel Cron calls this on a schedule (see vercel.json)
-// with `Authorization: Bearer $CRON_SECRET`. It is the safety net that keeps a
-// crashed bridge agent from silently stranding kitchen tickets.
+// Manual outbox reconciliation, authenticated with `Authorization: Bearer
+// $CRON_SECRET`.
 //
-// It also carries the retention prune, which is cheap and rides along rather
-// than justifying a second schedule — but only on the hourly tick, since it
-// only ever has day-scale work to do.
+// The server already runs this work on its own schedule (src/lib/scheduler.ts),
+// so nothing needs to call this. It exists so an operator can force a sweep
+// after fixing a printer — "make the stuck tickets go now" — and so external
+// monitoring can confirm the reconciliation path is healthy.
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 function authorized(req: NextRequest): boolean {
   const expected = Buffer.from(`Bearer ${getEnv().CRON_SECRET}`, "utf8");
@@ -29,7 +28,7 @@ export async function GET(req: NextRequest) {
   try {
     const result = await sweepPosDeliveries();
     if (result.reclaimed > 0 || result.exhausted > 0) {
-      // Surfaces in the Vercel function logs, where an alert can be attached.
+      // Surfaces in journalctl, where an alert can be attached.
       console.warn("pos sweep recovered stranded deliveries:", result);
     }
 

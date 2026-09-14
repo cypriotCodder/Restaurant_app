@@ -12,11 +12,23 @@ export type TicketLine = {
 
 export type Ticket = {
   venueName: string;
+  /** ISO code; the printed total is rendered in it. */
+  currency: string;
   tableName: string;
   orderNumber: number;
   createdAt: Date;
   lines: TicketLine[];
   totalKurus: number;
+  /**
+   * Present when staff corrected an order that had already been sent to the
+   * kitchen. The ticket is then printed as an amendment: the kitchen already
+   * holds paper for this order, so a second unmarked ticket would risk the
+   * dish being cooked twice.
+   */
+  amendment?: {
+    changes: { name: string; fromQty: number; toQty: number }[];
+    byStaff: string;
+  };
 };
 
 export interface PosAdapter {

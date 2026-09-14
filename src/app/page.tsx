@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { tableQrUrl } from "@/lib/qr";
 
-import { headers } from "next/headers";
+import { baseUrl } from "@/lib/env";
 
 // Platform landing. In production customers never see this — they arrive via
 // table QR.
@@ -20,10 +20,9 @@ export default async function Home() {
   const devVenue = SHOW_DEV_SCAN_LINKS
     ? await db.venue.findFirst({ include: { tables: { where: { active: true } } } })
     : null;
-  const headersList = await headers();
-  const host = headersList.get("x-forwarded-host") || headersList.get("host") || "localhost:3000";
-  const protocol = headersList.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? `${protocol}://${host}`;
+  // Runtime read — see baseUrl() in src/lib/env.ts for why this must not be
+  // `process.env.NEXT_PUBLIC_BASE_URL`.
+  const origin = baseUrl();
 
   return (
     <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--color-bg)" }}>
@@ -71,7 +70,7 @@ export default async function Home() {
               {devVenue.tables.map((t) => (
                 <a
                   key={t.id}
-                  href={tableQrUrl(baseUrl, devVenue.qrSecret, t.code, t.qrVersion)}
+                  href={tableQrUrl(origin, devVenue.qrSecret, t.code, t.qrVersion)}
                   className="tag tag-accent"
                 >
                   {t.name}

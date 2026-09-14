@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { formatKurus } from "@/lib/money";
+import { CurrencyProvider, useMoney } from "./MoneyContext";
+import PasswordChangeDialog from "./PasswordChangeDialog";
 
 // ---------- types ----------
 type AdminOption = { id?: string; nameTr: string; nameEn: string; priceDeltaKurus: number };
@@ -54,10 +55,12 @@ const TAB_PATHS: Record<TabKey, string> = {
   settings: "theheaven.app/admin/settings",
 };
 
-export default function AdminApp({ staffName }: { staffName: string }) {
+export default function AdminApp({ staffName, currency }: { staffName: string; currency: string }) {
   const [tab, setTab] = useState<TabKey>("menu");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   return (
+    <CurrencyProvider currency={currency}>
     <div className="admin-layout">
       {/* Sidebar */}
       <aside className="admin-sidebar">
@@ -80,14 +83,26 @@ export default function AdminApp({ staffName }: { staffName: string }) {
         </nav>
         <div className="mt-auto px-5 pt-4 flex flex-col gap-2 text-sm">
           <a href="/desk" className="btn-ghost text-left">Sipariş Ekranı</a>
+          <button onClick={() => setChangingPassword(true)} className="btn-ghost text-left">
+            Şifre Değiştir
+          </button>
           <button
-            onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+            onClick={async () => {
+              await fetch("/api/auth/logout", { method: "POST" });
+              // A hard navigation on purpose: this is a shared terminal, and a
+              // soft nav would leave the previous user's menu and order data in
+              // React state. Reloading discards all of it.
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+              window.location.href = "/login";
+            }}
             className="btn-ghost text-left"
           >
             Çıkış / Logout
           </button>
         </div>
       </aside>
+
+      {changingPassword && <PasswordChangeDialog onClose={() => setChangingPassword(false)} />}
 
       {/* Main area */}
       <div className="admin-main">
@@ -103,11 +118,13 @@ export default function AdminApp({ staffName }: { staffName: string }) {
         </div>
       </div>
     </div>
+    </CurrencyProvider>
   );
 }
 
 // ================= MENU =================
 function MenuTab() {
+  const money = useMoney();
   const [categories, setCategories] = useState<AdminCategory[]>([]);
   const [editing, setEditing] = useState<AdminItem | "new" | null>(null);
   const [newCat, setNewCat] = useState("");
@@ -268,7 +285,7 @@ function MenuTab() {
                     {!i.available && " · Tükendi / Sold out"}
                   </p>
                 </td>
-                <td className="font-medium">{formatKurus(i.priceKurus)}</td>
+                <td className="font-medium">{money(i.priceKurus)}</td>
                 <td>{i.catName}</td>
                 <td>
                   <label className="toggle">
@@ -496,6 +513,10 @@ function TablesTab() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="wordmark text-2xl">Masalar / Tables</h2>
         <div className="flex items-center gap-2">
+          {/* Printing 40 cards one PNG at a time is the install-day bottleneck. */}
+          <a href="/admin/qr-sheet" className="btn btn-secondary" target="_blank" rel="noopener">
+            Tüm QR Kartları Yazdır
+          </a>
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Masa adı (ör. Masa 9)" className="input" onKeyDown={(e) => e.key === "Enter" && newName.trim() && (async () => {
             await fetch("/api/admin/tables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName.trim() }) });
             setNewName("");
@@ -601,45 +622,72 @@ type LogOrder = {
   id: string;
   number: number;
   status: string;
+  paymentStatus: string;
+  paymentMethod: string | null;
   totalKurus: number;
   createdAt: string;
   tableName: string;
   items: { name: string; qty: number }[];
 };
 
+type Stats = {
+  today: PeriodStats;
+  yesterday: PeriodStats;
+  openTables: { count: number; runningKurus: number; billRequested: number };
+  change: { settled: number | null; orders: number | null };
+};
+
+type PeriodStats = {
+  settledKurus: number;
+  cashKurus: number;
+  cardKurus: number;
+  settledVisits: number;
+  avgCheckKurus: number;
+  ordersPlaced: number;
+  ordersRejected: number;
+  itemsSold: number;
+};
+
 function OrdersTab() {
+  const money = useMoney();
   const [orders, setOrders] = useState<LogOrder[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [days, setDays] = useState(7);
+  const [truncated, setTruncated] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "cancelled">("all");
 
+  const load = useCallback(async () => {
+    const [ordersRes, statsRes] = await Promise.all([
+      fetch(`/api/admin/orders?days=${days}`),
+      fetch("/api/admin/stats"),
+    ]);
+    if (ordersRes.ok) {
+      const data = await ordersRes.json();
+      setOrders(data.orders);
+      setTruncated(data.truncated);
+    }
+    if (statsRes.ok) setStats(await statsRes.json());
+  }, [days]);
+
   useEffect(() => {
-    fetch("/api/desk/orders?all=1").then(async (res) => {
-      if (res.ok) setOrders((await res.json()).orders);
-    });
-  }, []);
+    (async () => { await load(); })();
+  }, [load]);
 
-  // Stats calculation
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayOrders = orders.filter(o => new Date(o.createdAt) >= today);
-  const completedToday = todayOrders.filter(o => !["rejected"].includes(o.status));
-  const revenue = completedToday.reduce((s, o) => s + o.totalKurus, 0);
-  const avgTicket = completedToday.length > 0 ? Math.round(revenue / completedToday.length) : 0;
+  // The screen used to fetch once on mount and then silently go stale for the
+  // rest of the shift. Live push, with a poll as the safety net.
+  useEffect(() => {
+    const es = new EventSource("/api/desk/stream");
+    es.onmessage = () => { void load(); };
+    const poll = setInterval(() => void load(), 60000);
+    return () => {
+      es.close();
+      clearInterval(poll);
+    };
+  }, [load]);
 
-  // Yesterday stats for comparison
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayOrders = orders.filter(o => {
-    const d = new Date(o.createdAt);
-    return d >= yesterday && d < today;
-  });
-  const yesterdayCompleted = yesterdayOrders.filter(o => !["rejected"].includes(o.status));
-  const yesterdayRevenue = yesterdayCompleted.reduce((s, o) => s + o.totalKurus, 0);
-  const revenueDelta = yesterdayRevenue > 0 ? Math.round(((revenue - yesterdayRevenue) / yesterdayRevenue) * 100) : 0;
-
-  // Filter orders for display
-  const displayOrders = orders.filter(o => {
+  const displayOrders = orders.filter((o) => {
     if (statusFilter === "completed") return ["served", "ready"].includes(o.status);
-    if (statusFilter === "cancelled") return o.status === "rejected";
+    if (statusFilter === "cancelled") return ["rejected", "cancelled"].includes(o.status);
     return true;
   });
 
@@ -650,11 +698,15 @@ function OrdersTab() {
       preparing: { cls: "tag-accent", label: "Hazırlanıyor" },
       ready: { cls: "tag-outline", label: "Hazır" },
       served: { cls: "tag-neutral", label: "Servis Edildi" },
-      rejected: { cls: "tag-danger", label: "İptal / Cancelled" },
+      rejected: { cls: "tag-danger", label: "Reddedildi / Rejected" },
+      cancelled: { cls: "tag-danger", label: "Müşteri İptali / Customer cancelled" },
     };
     const m = map[status] ?? { cls: "tag-neutral", label: status };
     return <span className={`tag ${m.cls}`}>{m.label}</span>;
   };
+
+  const delta = (pct: number | null) =>
+    pct === null ? "dün veri yok / no data" : `${pct > 0 ? "+" : ""}${pct}% dün / vs yesterday`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -666,33 +718,82 @@ function OrdersTab() {
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="flex gap-3 flex-wrap">
-        <div className="stat-card">
-          <p className="stat-card-label">BUGÜN / TODAY</p>
-          <p className="stat-card-value">{todayOrders.length}</p>
-          <p className="stat-card-sub">Sipariş / Orders</p>
+      {/* Takings and kitchen volume are deliberately separate numbers: an order
+          placed is not money until staff settle the table at the till. */}
+      {stats && (
+        <>
+          <div className="flex gap-3 flex-wrap">
+            <div className="stat-card">
+              <p className="stat-card-label">CİRO / TAKINGS</p>
+              <p className="stat-card-value">{money(stats.today.settledKurus)}</p>
+              <p className="stat-card-sub">{delta(stats.change.settled)}</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-card-label">NAKİT / KART</p>
+              <p className="stat-card-value" style={{ fontSize: "1.1rem" }}>
+                {money(stats.today.cashKurus)} / {money(stats.today.cardKurus)}
+              </p>
+              <p className="stat-card-sub">Kasa mutabakatı / till reconciliation</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-card-label">ORT. ADİSYON / AVG CHECK</p>
+              <p className="stat-card-value">{money(stats.today.avgCheckKurus)}</p>
+              <p className="stat-card-sub">
+                {stats.today.settledVisits} kapanan masa / settled tables
+              </p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-card-label">SİPARİŞ / ORDERS</p>
+              <p className="stat-card-value">{stats.today.ordersPlaced}</p>
+              <p className="stat-card-sub">{delta(stats.change.orders)}</p>
+            </div>
+          </div>
+
+          {stats.openTables.count > 0 && (
+            <p className="text-sm" style={{ color: "var(--color-neutral-900)" }}>
+              Şu an <strong>{stats.openTables.count}</strong> açık masa ·{" "}
+              <strong>{money(stats.openTables.runningKurus)}</strong> henüz tahsil edilmedi
+              {stats.openTables.billRequested > 0 && (
+                <span style={{ color: "var(--color-heaven-orange)" }}>
+                  {" "}· {stats.openTables.billRequested} hesap bekliyor
+                </span>
+              )}
+              <br />
+              <span style={{ fontSize: "0.75rem" }}>
+                {stats.openTables.count} open table(s), {money(stats.openTables.runningKurus)}{" "}
+                not yet taken — excluded from takings above.
+              </span>
+            </p>
+          )}
+        </>
+      )}
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="seg w-fit">
+          {([["all", "Tümü"], ["completed", "Tamamlandı"], ["cancelled", "İptal"]] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setStatusFilter(k)} className={`seg-opt ${statusFilter === k ? "on" : ""}`}>
+              {label}
+            </button>
+          ))}
         </div>
-        <div className="stat-card">
-          <p className="stat-card-label">CİRO / REVENUE</p>
-          <p className="stat-card-value">{formatKurus(revenue)}</p>
-          <p className="stat-card-sub">{revenueDelta !== 0 ? `${revenueDelta > 0 ? "+" : ""}${revenueDelta}% dün / vs yesterday` : "—"}</p>
-        </div>
-        <div className="stat-card">
-          <p className="stat-card-label">ORT. FİŞ / AVG TICKET</p>
-          <p className="stat-card-value">{formatKurus(avgTicket)}</p>
-          <p className="stat-card-sub">{completedToday.length} {completedToday.length === 1 ? "order" : "orders"}</p>
+        <div className="seg w-fit">
+          {/* A rolling window, not calendar days — the stat cards above are the
+              calendar-day figures. Labelled "son N gün" so the two are not
+              confused with each other. */}
+          {([1, 7, 30] as const).map((d) => (
+            <button key={d} onClick={() => setDays(d)} className={`seg-opt ${days === d ? "on" : ""}`}>
+              son {d} gün
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Filter tabs */}
-      <div className="seg w-fit">
-        {([["all", "Tümü"], ["completed", "Tamamlandı"], ["cancelled", "İptal"]] as const).map(([k, label]) => (
-          <button key={k} onClick={() => setStatusFilter(k)} className={`seg-opt ${statusFilter === k ? "on" : ""}`}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {truncated && (
+        <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
+          İlk 500 sipariş gösteriliyor. Tamamı için CSV indirin. / Showing the first 500 — use
+          the CSV export for the full range.
+        </p>
+      )}
 
       {/* Orders table */}
       <div className="bg-white border overflow-x-auto" style={{ borderColor: "var(--color-divider)" }}>
@@ -704,18 +805,24 @@ function OrdersTab() {
               <th>KALEMLER / ITEMS</th>
               <th>TOPLAM / TOTAL</th>
               <th>DURUM / STATUS</th>
+              <th>ÖDEME / PAID</th>
               <th>SAAT / TIME</th>
             </tr>
           </thead>
           <tbody>
-            {displayOrders.slice().reverse().map((o) => (
+            {displayOrders.map((o) => (
               <tr key={o.id}>
                 <td className="font-bold">#{o.number}</td>
                 <td>{o.tableName}</td>
                 <td style={{ color: "var(--color-neutral-900)" }}>{o.items.length} {o.items.length === 1 ? "item" : "items"}</td>
-                <td className="font-medium">{formatKurus(o.totalKurus)}</td>
+                <td className="font-medium">{money(o.totalKurus)}</td>
                 <td>{statusBadge(o.status)}</td>
-                <td>{new Date(o.createdAt).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}</td>
+                <td style={{ color: "var(--color-neutral-900)" }}>
+                  {o.paymentStatus === "paid"
+                    ? (o.paymentMethod === "card" ? "Kart" : "Nakit")
+                    : "—"}
+                </td>
+                <td>{new Date(o.createdAt).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
               </tr>
             ))}
           </tbody>
@@ -866,10 +973,19 @@ type StaffRow = {
 // Staff tokens are stateless 12h JWTs, so "sign out everywhere" and
 // deactivation both work by bumping the account's token version. Revocation
 // lands within the 30s account-cache window, not 12 hours.
+// Staff accounts are managed here rather than in psql: restaurant turnover is
+// constant, and a manager needs to add a new starter on their first shift.
+//
+// Staff tokens are stateless 12h JWTs, so every change that affects who an
+// account is — role, password, deactivation — bumps its token version and takes
+// effect within the 30s account-cache window rather than in 12 hours.
 function StaffPanel() {
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [self, setSelf] = useState<string>("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<StaffRow | null>(null);
+  const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch("/api/admin/staff");
@@ -886,20 +1002,37 @@ function StaffPanel() {
 
   async function act(id: string, body: Record<string, unknown>) {
     setBusy(id);
-    await fetch(`/api/admin/staff/${id}`, {
+    setError("");
+    const res = await fetch(`/api/admin/staff/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    await load();
     setBusy(null);
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setError(staffErrorText(b.error, b.detail));
+      return false;
+    }
+    await load();
+    return true;
   }
+
+  const admins = rows.filter((u) => u.role === "admin" && u.active).length;
 
   return (
     <div className="card" style={{ maxWidth: 600 }}>
-      <h3 className="text-xs font-bold uppercase tracking-wide mb-4">
-        Personel / Staff Access
-      </h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-bold uppercase tracking-wide">Personel / Staff Access</h3>
+        <button onClick={() => { setAdding(true); setError(""); }} className="btn btn-primary">
+          + Personel Ekle
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-sm mb-3" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>
+      )}
+
       <div className="flex flex-col gap-3">
         {rows.map((u) => (
           <div
@@ -919,9 +1052,17 @@ function StaffPanel() {
               <button
                 className="btn btn-secondary"
                 disabled={busy === u.id}
-                onClick={() => act(u.id, { signOutEverywhere: true })}
+                onClick={() => { setEditing(u); setError(""); }}
               >
-                Oturumları Kapat / Sign out
+                Düzenle / Edit
+              </button>
+              <button
+                className="btn btn-ghost"
+                disabled={busy === u.id}
+                onClick={() => act(u.id, { signOutEverywhere: true })}
+                title="Tüm cihazlardan çıkış / Sign out everywhere"
+              >
+                Oturumları Kapat
               </button>
               {u.id !== self && (
                 <button
@@ -929,18 +1070,218 @@ function StaffPanel() {
                   disabled={busy === u.id}
                   onClick={() => act(u.id, { active: !u.active })}
                 >
-                  {u.active ? "Devre Dışı / Disable" : "Etkinleştir / Enable"}
+                  {u.active ? "Devre Dışı" : "Etkinleştir"}
                 </button>
               )}
             </span>
           </div>
         ))}
       </div>
-      <p className="text-xs mt-4 pt-3" style={{ color: "var(--color-neutral-900)", borderTop: "1px solid var(--color-divider)" }}>
-        Devre dışı bırakılan hesabın açık oturumları 30 saniye içinde kapanır.
+
+      <p
+        className="text-xs mt-4 pt-3"
+        style={{ color: "var(--color-neutral-900)", borderTop: "1px solid var(--color-divider)" }}
+      >
+        Değişiklikler 30 saniye içinde tüm cihazlarda geçerli olur.
+        {admins === 1 && " Son yönetici hesabı devre dışı bırakılamaz."}
         <br />
-        A disabled account&apos;s open sessions end within 30 seconds.
+        Changes take effect on every device within 30 seconds.
+        {admins === 1 && " The last admin account cannot be disabled."}
       </p>
+
+      {adding && (
+        <StaffForm
+          title="Yeni Personel / New Staff"
+          onClose={() => setAdding(false)}
+          onSubmit={async (values) => {
+            const res = await fetch("/api/admin/staff", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(values),
+            });
+            if (!res.ok) {
+              const b = await res.json().catch(() => ({}));
+              return staffErrorText(b.error, b.detail);
+            }
+            setAdding(false);
+            await load();
+            return null;
+          }}
+        />
+      )}
+
+      {editing && (
+        <StaffForm
+          title={`${editing.name} — Düzenle`}
+          existing={editing}
+          isSelf={editing.id === self}
+          onClose={() => setEditing(null)}
+          onSubmit={async (values) => {
+            // Only send what changed; an unchanged password field must not
+            // reset the account's password to an empty string.
+            const patch: Record<string, unknown> = { name: values.name, role: values.role };
+            if (values.password) patch.password = values.password;
+            const res = await fetch(`/api/admin/staff/${editing.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(patch),
+            });
+            if (!res.ok) {
+              const b = await res.json().catch(() => ({}));
+              return staffErrorText(b.error, b.detail);
+            }
+            setEditing(null);
+            await load();
+            return null;
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function staffErrorText(code: string | undefined, detail?: string): string {
+  switch (code) {
+    case "email_taken":
+      return "Bu e-posta zaten kayıtlı / That email is already registered";
+    case "last_admin":
+      return "Son yönetici hesabı devre dışı bırakılamaz veya düşürülemez / Cannot remove the last admin";
+    case "cannot_deactivate_self":
+      return "Kendi hesabınızı devre dışı bırakamazsınız / You cannot disable your own account";
+    case "cannot_demote_self":
+      return "Kendi yetkinizi düşüremezsiniz / You cannot demote yourself";
+    case "invalid":
+      return detail ?? "Geçersiz bilgi / Invalid input";
+    case "rate_limited":
+      return "Çok fazla deneme. Lütfen bekleyin / Too many attempts, please wait";
+    case "wrong_password":
+      return "Mevcut şifre hatalı / Current password is incorrect";
+    default:
+      return "İşlem başarısız / Could not complete";
+  }
+}
+
+type StaffFormValues = { email: string; name: string; role: "admin" | "desk"; password: string };
+
+function StaffForm({
+  title,
+  existing,
+  isSelf,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  existing?: StaffRow;
+  isSelf?: boolean;
+  onClose: () => void;
+  /** Returns an error message to display, or null on success. */
+  onSubmit: (values: StaffFormValues) => Promise<string | null>;
+}) {
+  const [email, setEmail] = useState(existing?.email ?? "");
+  const [name, setName] = useState(existing?.name ?? "");
+  const [role, setRole] = useState<"admin" | "desk">(
+    (existing?.role as "admin" | "desk") ?? "desk"
+  );
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    const err = await onSubmit({ email, name, role, password });
+    setBusy(false);
+    if (err) setError(err);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.5)" }}
+      onClick={() => !busy && onClose()}
+    >
+      <form
+        onSubmit={submit}
+        className="bg-white p-5 w-full max-w-sm flex flex-col gap-3"
+        style={{ border: "2px solid var(--color-text)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="wordmark text-base">{title}</h2>
+
+        {!existing && (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-bold uppercase tracking-wide">E-POSTA / EMAIL</span>
+            <input
+              type="email"
+              required
+              autoComplete="off"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="input"
+            />
+          </label>
+        )}
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-bold uppercase tracking-wide">İSİM / NAME</span>
+          <input
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="input"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-bold uppercase tracking-wide">YETKİ / ROLE</span>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as "admin" | "desk")}
+            disabled={isSelf}
+            className="input"
+          >
+            <option value="desk">Mutfak / Order desk</option>
+            <option value="admin">Yönetici / Admin</option>
+          </select>
+          {isSelf && (
+            <span className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
+              Kendi yetkinizi değiştiremezsiniz / You cannot change your own role
+            </span>
+          )}
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-bold uppercase tracking-wide">
+            {existing ? "YENİ ŞİFRE / NEW PASSWORD" : "ŞİFRE / PASSWORD"}
+          </span>
+          <input
+            type="password"
+            required={!existing}
+            autoComplete="new-password"
+            placeholder={existing ? "Değiştirmemek için boş bırakın" : ""}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="input"
+          />
+          <span className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
+            {existing
+              ? "Şifre değişirse diğer tüm cihazlardan çıkış yapılır."
+              : "En az 8 karakter."}
+          </span>
+        </label>
+
+        {error && <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+
+        <div className="flex gap-2 mt-1">
+          <button disabled={busy} className="btn btn-primary flex-1 justify-center py-3">
+            {busy ? "..." : "Kaydet / Save"}
+          </button>
+          <button type="button" disabled={busy} onClick={onClose} className="btn btn-ghost">
+            Vazgeç
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -949,25 +1290,320 @@ function SettingsTab() {
   return (
     <div className="flex flex-col gap-5">
       <h2 className="wordmark text-2xl">Ayarlar / Settings</h2>
+      <VenuePanel />
       <PosHealthPanel />
+      <BridgeKeyPanel />
       <StaffPanel />
-      <div className="card" style={{ maxWidth: 600 }}>
-        <div className="flex flex-col items-center justify-center py-16 gap-4">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" style={{ color: "var(--color-neutral-900)" }}>
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-          <p className="text-lg font-bold">Yakında / Coming Soon</p>
-          <p className="text-sm text-center" style={{ color: "var(--color-neutral-900)" }}>
-            Restoran ayarları, dil tercihleri, servis ücreti ve<br />
-            diğer yapılandırmalar burada yer alacak.
+      <DangerZonePanel />
+    </div>
+  );
+}
+
+type VenueForm = { name: string; currency: string; defaultLocale: string; posAdapter: string };
+
+// Venue configuration. Every field here used to be a database column with no
+// way to change it short of a SQL statement.
+function VenuePanel() {
+  const [form, setForm] = useState<VenueForm | null>(null);
+  const [options, setOptions] = useState<{ currencies: string[]; posAdapters: string[] }>({
+    currencies: [],
+    posAdapters: [],
+  });
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/admin/venue");
+    if (res.ok) {
+      const d = await res.json();
+      setForm(d.venue);
+      setOptions(d.options);
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => { await load(); })();
+  }, [load]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form || busy) return;
+    setBusy(true);
+    setError("");
+    const res = await fetch("/api/admin/venue", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setBusy(false);
+    if (res.ok) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      // The currency is read once at page load (server component), so a change
+      // only reaches every price on screen after a reload.
+      setTimeout(() => window.location.reload(), 400);
+      return;
+    }
+    const b = await res.json().catch(() => ({}));
+    setError(b.detail ?? "Kaydedilemedi / Could not save");
+  }
+
+  if (!form) return null;
+
+  return (
+    <form onSubmit={save} className="card flex flex-col gap-3" style={{ maxWidth: 600 }}>
+      <h3 className="text-xs font-bold uppercase tracking-wide">Restoran / Venue</h3>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-bold uppercase tracking-wide">İSİM / NAME</span>
+        <input
+          required
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          className="input"
+        />
+        <span className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
+          Müşteri menüsünde ve mutfak fişinde görünür.
+        </span>
+      </label>
+
+      <div className="flex gap-3 flex-wrap">
+        <label className="flex flex-col gap-1 flex-1" style={{ minWidth: 160 }}>
+          <span className="text-xs font-bold uppercase tracking-wide">PARA BİRİMİ / CURRENCY</span>
+          <select
+            value={form.currency}
+            onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            className="input"
+          >
+            {options.currencies.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 flex-1" style={{ minWidth: 160 }}>
+          <span className="text-xs font-bold uppercase tracking-wide">VARSAYILAN DİL / LOCALE</span>
+          <select
+            value={form.defaultLocale}
+            onChange={(e) => setForm({ ...form, defaultLocale: e.target.value })}
+            className="input"
+          >
+            <option value="tr">Türkçe</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--color-heaven-orange)" }}>
+        Para birimi yalnızca görüntülemeyi değiştirir — mevcut fiyatlar çevrilmez.
+        <br />
+        <span style={{ color: "var(--color-neutral-900)" }}>
+          Changing currency changes display only; existing prices are not converted.
+        </span>
+      </p>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-bold uppercase tracking-wide">MUTFAK ÇIKTISI / POS ADAPTER</span>
+        <select
+          value={form.posAdapter}
+          onChange={(e) => setForm({ ...form, posAdapter: e.target.value })}
+          className="input"
+        >
+          <option value="escpos_bridge">Mutfak yazıcısı (ESC/POS köprüsü)</option>
+          <option value="console">Sunucu günlüğü / Server log (test)</option>
+        </select>
+        <span className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
+          &quot;Server log&quot; seçilirse mutfakta hiçbir şey basılmaz — sadece test içindir.
+        </span>
+      </label>
+
+      {error && <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+
+      <div className="flex items-center gap-3">
+        <button disabled={busy} className="btn btn-primary justify-center py-3">
+          {busy ? "..." : "Kaydet / Save"}
+        </button>
+        {saved && (
+          <span className="text-sm" style={{ color: "var(--color-accent-700)" }}>
+            Kaydedildi / Saved
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
+
+type BridgeKeyRow = { id: string; label: string; hint: string; createdAt: string };
+
+// The on-prem bridge agent authenticates with one of these. Previously they
+// existed only from the seed, so replacing a compromised key meant SQL.
+function BridgeKeyPanel() {
+  const [keys, setKeys] = useState<BridgeKeyRow[]>([]);
+  const [label, setLabel] = useState("");
+  const [issued, setIssued] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/admin/venue");
+    if (res.ok) setKeys((await res.json()).bridgeKeys);
+  }, []);
+
+  useEffect(() => {
+    (async () => { await load(); })();
+  }, [load]);
+
+  async function create() {
+    setBusy(true);
+    const res = await fetch("/api/admin/bridge-keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    setBusy(false);
+    if (res.ok) {
+      const d = await res.json();
+      setIssued(d.key);
+      setLabel("");
+      await load();
+    }
+  }
+
+  async function remove(id: string) {
+    if (!confirm("Bu anahtar silinsin mi? Kullanan ajan çalışmayı durdurur.")) return;
+    await fetch(`/api/admin/bridge-keys?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    await load();
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: 600 }}>
+      <h3 className="text-xs font-bold uppercase tracking-wide mb-3">
+        Mutfak Köprüsü Anahtarları / Bridge Keys
+      </h3>
+
+      {issued && (
+        <div className="mb-3 p-3" style={{ border: "2px solid var(--color-accent)" }}>
+          <p className="text-xs font-bold uppercase tracking-wide mb-1">
+            Anahtar bir kez gösterilir / Shown once
+          </p>
+          <code className="text-sm break-all">{issued}</code>
+          <p className="text-xs mt-2" style={{ color: "var(--color-neutral-900)" }}>
+            Mutfak bilgisayarındaki ajana <code>BRIDGE_KEY</code> olarak girin. Bu pencere
+            kapandıktan sonra tekrar görüntülenemez.
+          </p>
+          <button onClick={() => setIssued(null)} className="btn btn-ghost mt-2">
+            Kaydettim / I saved it
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2 text-sm">
+        {keys.length === 0 && (
+          <p style={{ color: "var(--color-neutral-900)" }}>
+            Anahtar yok — mutfak yazıcısı çalışmaz. / No keys; the kitchen printer cannot connect.
+          </p>
+        )}
+        {keys.map((k) => (
+          <div key={k.id} className="flex items-center justify-between gap-3">
+            <span>
+              <strong>{k.label}</strong>
+              <span style={{ color: "var(--color-neutral-900)" }}>
+                {" "}· {k.hint} · {new Date(k.createdAt).toLocaleDateString("tr-TR")}
+              </span>
+            </span>
+            <button onClick={() => remove(k.id)} className="btn btn-ghost">Sil / Delete</button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2 mt-3 pt-3" style={{ borderTop: "1px solid var(--color-divider)" }}>
+        <input
+          placeholder="Etiket / label (ör. mutfak-pi)"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          className="input flex-1"
+        />
+        <button onClick={create} disabled={busy} className="btn btn-secondary">
+          {busy ? "..." : "Yeni Anahtar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Rotating the venue QR secret invalidates every printed table card at once.
+// It is the remedy for a leaked secret, not routine maintenance, so it is
+// separated from everything else and gated behind typing the venue slug.
+function DangerZonePanel() {
+  const [open, setOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [expected, setExpected] = useState("");
+  const [result, setResult] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function rotate() {
+    setBusy(true);
+    setResult("");
+    const res = await fetch("/api/admin/venue/qr-secret", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: confirmText }),
+    });
+    setBusy(false);
+    const b = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setResult(`${b.tablesAffected} masanın QR kodu yenilendi — hepsini yeniden yazdırın.`);
+      setConfirmText("");
+      return;
+    }
+    if (b.error === "confirmation_required") {
+      setExpected(b.expected ?? "");
+      setResult("Onay metni eşleşmiyor / Confirmation text does not match");
+      return;
+    }
+    setResult("İşlem başarısız / Failed");
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: 600, borderColor: "var(--color-heaven-orange)" }}>
+      <h3 className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--color-heaven-orange)" }}>
+        Tehlikeli Bölge / Danger Zone
+      </h3>
+
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="btn btn-ghost">
+          Tüm QR kodlarını geçersiz kıl / Invalidate all QR codes
+        </button>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm">
+            Bu işlem <strong>tüm masaların basılı QR kodlarını</strong> geçersiz kılar ve
+            oturumdaki tüm müşterileri çıkarır. Yalnızca QR imza anahtarı sızdıysa kullanın —
+            tek bir masa için Masalar ekranındaki &quot;QR Yenile&quot; yeterlidir.
           </p>
           <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
-            Restaurant settings, language preferences, service charges<br />
-            and other configurations will be here.
+            Invalidates every printed table card and signs out every customer. Use only if the
+            signing secret leaked; for one table, use &quot;QR Yenile&quot; on the Tables screen.
           </p>
+          <input
+            placeholder={expected ? `Onaylamak için yazın: ${expected}` : "Onaylamak için restoran kodunu yazın"}
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            className="input"
+          />
+          {result && (
+            <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{result}</p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={rotate} disabled={busy || !confirmText} className="btn btn-primary">
+              {busy ? "..." : "Onaylıyorum / Confirm"}
+            </button>
+            <button onClick={() => { setOpen(false); setResult(""); }} className="btn btn-ghost">
+              Vazgeç
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
