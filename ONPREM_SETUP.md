@@ -131,15 +131,22 @@ npm run package
 
 `output: "standalone"` produces `.next/standalone` — a self-contained server with
 only the packages actually imported, so the PC needs no `npm install`. `npm run
-package` also copies the two directories Next leaves out by design, and deletes
-the development `.env` that `next build` otherwise copies in:
+package` also copies the directories Next leaves out — the two it excludes by
+design, plus `bridge/`, which is not imported by the app and so is invisible to
+the tracer — and deletes the development `.env` that `next build` otherwise
+copies in:
 
 ```
 next build
   && cp -r .next/static .next/standalone/.next/static
   && cp -r public       .next/standalone/public
+  && cp -r bridge       .next/standalone/bridge
   && rm -f .next/standalone/.env
 ```
+
+The bridge copy is what makes the `/opt/masadan/bridge/agent.mjs` path in
+section 6 exist. The agent talks to the server over HTTP like any other client,
+so nothing in the app imports it and nothing else would put it there.
 
 Copy `.next/standalone` to `/opt/masadan` on the PC, then apply migrations:
 
