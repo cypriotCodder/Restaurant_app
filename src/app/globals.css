@@ -340,6 +340,8 @@ body {
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 .menu-card-img {
+  /* next/image fill absolutely positions the photo against this box. */
+  position: relative;
   height: 100px;
   background: var(--color-neutral-100);
   display: flex;

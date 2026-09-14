@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { t, type Locale } from "@/lib/i18n";
 import { useMoney } from "../MoneyContext";
 import Sheet from "./Sheet";
@@ -50,10 +51,15 @@ export default function ItemSheet({
   return (
     <Sheet title={name(item, locale)} onClose={onClose}>
       {/* Photo area */}
-      <div className="w-full h-40 flex items-center justify-center mb-4" style={{ background: "var(--color-neutral-100)", border: "1px solid var(--color-divider)" }}>
+      <div className="relative w-full h-40 flex items-center justify-center mb-4" style={{ background: "var(--color-neutral-100)", border: "1px solid var(--color-divider)" }}>
         {item.photoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={item.photoUrl} alt="" className="h-full w-full object-cover" />
+          <Image
+            src={item.photoUrl}
+            alt=""
+            fill
+            sizes="(max-width: 640px) 100vw, 512px"
+            className="object-cover"
+          />
         ) : (
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
             <rect x="3" y="3" width="18" height="18" rx="2" />

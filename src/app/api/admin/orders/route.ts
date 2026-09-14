@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { pageLimit, splitPage } from "@/lib/pagination";
 import { requireStaff } from "@/lib/staffAuth";
 
 // The order log for the admin screen.
@@ -8,11 +9,6 @@ import { requireStaff } from "@/lib/staffAuth";
 // hours because that is all a kitchen needs. A manager looking at history needs
 // to choose a range.
 const MAX_DAYS = 365;
-// One screenful at a time. The screen used to take a flat 500 and tell the
-// manager to go download a CSV for anything older; it now pages instead, so a
-// long range costs a small first render and only fetches more on request.
-const PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
 
 export async function GET(req: NextRequest) {
   const staff = await requireStaff("admin");
@@ -21,11 +17,7 @@ export async function GET(req: NextRequest) {
   const requested = Number(req.nextUrl.searchParams.get("days"));
   const days = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_DAYS) : 7;
 
-  const requestedLimit = Number(req.nextUrl.searchParams.get("limit"));
-  const limit =
-    Number.isFinite(requestedLimit) && requestedLimit > 0
-      ? Math.min(requestedLimit, MAX_PAGE_SIZE)
-      : PAGE_SIZE;
+  const limit = pageLimit(req.nextUrl.searchParams.get("limit"));
   const cursor = req.nextUrl.searchParams.get("cursor");
 
   const rows = await db.order.findMany({
@@ -44,12 +36,11 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  const hasMore = rows.length > limit;
-  const orders = hasMore ? rows.slice(0, limit) : rows;
+  const { items: orders, nextCursor } = splitPage(rows, limit);
 
   return NextResponse.json({
     days,
-    nextCursor: hasMore ? orders[orders.length - 1].id : null,
+    nextCursor,
     orders: orders.map((o) => ({
       id: o.id,
       number: o.number,

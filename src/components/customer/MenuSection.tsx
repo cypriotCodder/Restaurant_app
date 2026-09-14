@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { t, type Locale } from "@/lib/i18n";
 import { name } from "./shared";
 import type { Item, Menu } from "./types";
@@ -35,8 +36,14 @@ export default function MenuSection({
                 >
                   <div className="menu-card-img" aria-hidden>
                     {i.photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={i.photoUrl} alt="" />
+                      <Image
+                        src={i.photoUrl}
+                        alt=""
+                        fill
+                        // Two cards per row on a phone, which is the only
+                        // layout this grid has.
+                        sizes="(max-width: 640px) 50vw, 260px"
+                      />
                     ) : (
                       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.4">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />

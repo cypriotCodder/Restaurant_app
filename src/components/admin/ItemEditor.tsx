@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import type { AdminCategory, AdminGroup, AdminItem } from "./types";
 export default function ItemEditor({
@@ -101,8 +102,14 @@ export default function ItemEditor({
             Fotoğraf
             <div className="flex items-center gap-3 mt-1">
               {form.photoUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={form.photoUrl} alt="" className="h-14 w-14 object-cover" style={{ border: "1px solid var(--color-divider)" }} />
+                <Image
+                  src={form.photoUrl}
+                  alt=""
+                  width={56}
+                  height={56}
+                  className="h-14 w-14 object-cover"
+                  style={{ border: "1px solid var(--color-divider)" }}
+                />
               )}
               <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0])} />
               {form.photoUrl && (

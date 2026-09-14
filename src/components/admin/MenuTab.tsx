@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
@@ -144,12 +145,11 @@ export default function MenuTab() {
               <tr key={i.id} style={!i.available ? { opacity: 0.5 } : undefined}>
                 <td>
                   <div
-                    className="h-10 w-10 flex items-center justify-center"
+                    className="relative h-10 w-10 flex items-center justify-center"
                     style={{ background: "var(--color-neutral-100)", border: "1px solid var(--color-divider)" }}
                   >
                     {i.photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={i.photoUrl} alt="" className="h-full w-full object-cover" />
+                      <Image src={i.photoUrl} alt="" fill sizes="40px" className="object-cover" />
                     ) : (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
