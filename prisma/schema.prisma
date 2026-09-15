@@ -126,6 +126,8 @@ model Category {
   active    Boolean @default(true)
 
   items MenuItem[]
+
+  @@index([venueId, active])
 }
 
 model MenuItem {
@@ -147,6 +149,8 @@ model MenuItem {
 
   modifierGroups ModifierGroup[]
   orderItems     OrderItem[]
+
+  @@index([venueId, categoryId])
 }
 
 model ModifierGroup {
@@ -160,6 +164,8 @@ model ModifierGroup {
   sortOrder Int      @default(0)
 
   options ModifierOption[]
+
+  @@index([itemId])
 }
 
 model ModifierOption {
@@ -170,6 +176,8 @@ model ModifierOption {
   nameEn          String
   priceDeltaKurus Int           @default(0)
   sortOrder       Int           @default(0)
+
+  @@index([groupId])
 }
 
 model TableSession {
@@ -190,6 +198,9 @@ model TableSession {
   revokedAt  DateTime?
 
   orders Order[]
+
+  @@index([visitId])
+  @@index([tableId])
 }
 
 model Order {
@@ -231,6 +242,11 @@ model Order {
   @@unique([sessionId, idempotencyKey])
   @@index([venueId, status])
   @@index([visitId])
+  // The desk's "last 24h" view and every admin/report range scan filter on
+  // venue + createdAt and read back in that order.
+  @@index([venueId, createdAt])
+  @@index([sessionId])
+  @@index([tableId])
 }
 
 model OrderItem {
@@ -249,6 +265,11 @@ model OrderItem {
   // Set when staff remove the line from the order. The row is kept rather than
   // deleted so the history of what was ordered survives the correction.
   voidedAt       DateTime?
+
+  // Every desk refresh, bill and order list joins lines by order. Postgres does
+  // not index a foreign key for you, so without this each include is a scan of
+  // the whole table.
+  @@index([orderId])
 }
 
 // Who changed an order after it was placed, and what they changed.
@@ -318,6 +339,7 @@ model PosDelivery {
 
   @@index([venueId, status])
   @@index([status, claimedAt])
+  @@index([orderId])
 }
 
 // API keys for on-prem bridge agents pulling the outbox.

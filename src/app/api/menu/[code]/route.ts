@@ -13,22 +13,29 @@ export async function GET(
   if (!session) {
     return NextResponse.json({ error: "no_session" }, { status: 401 });
   }
-  const categories = await db.category.findMany({
-    where: { venueId: session.venueId, active: true },
-    orderBy: { sortOrder: "asc" },
-    include: {
-      items: {
-        orderBy: { sortOrder: "asc" },
-        include: {
-          modifierGroups: {
-            orderBy: { sortOrder: "asc" },
-            include: { options: { orderBy: { sortOrder: "asc" } } },
+  // The venue row does not depend on the menu, and this is the request every
+  // customer makes first, over cellular, before they can do anything.
+  const [categories, venue] = await Promise.all([
+    db.category.findMany({
+      where: { venueId: session.venueId, active: true },
+      orderBy: { sortOrder: "asc" },
+      include: {
+        items: {
+          orderBy: { sortOrder: "asc" },
+          include: {
+            modifierGroups: {
+              orderBy: { sortOrder: "asc" },
+              include: { options: { orderBy: { sortOrder: "asc" } } },
+            },
           },
         },
       },
-    },
-  });
-  const venue = await db.venue.findUniqueOrThrow({ where: { id: session.venueId } });
+    }),
+    db.venue.findUniqueOrThrow({
+      where: { id: session.venueId },
+      select: { name: true, currency: true, defaultLocale: true },
+    }),
+  ]);
   return NextResponse.json({
     venue: { name: venue.name, currency: venue.currency, defaultLocale: venue.defaultLocale },
     table: { name: session.tableName, code: session.tableCode },

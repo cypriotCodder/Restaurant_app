@@ -144,6 +144,68 @@ export async function buildBill(visitId: string): Promise<Bill | null> {
   };
 }
 
+export type BillSummary = {
+  visitId: string;
+  tableId: string;
+  tableName: string;
+  status: string;
+  openedAt: Date;
+  billRequestedAt: Date | null;
+  totalKurus: number;
+  orderCount: number;
+  phoneCount: number;
+};
+
+/**
+ * Totals for every open visit at a venue — what the desk's "open tables" strip
+ * needs, which is the money and the counts but not the lines.
+ *
+ * Deliberately not `buildBill` in a loop: that runs a full nested read per
+ * table, and the desk re-reads this on every SSE event as well as on a 60s
+ * poll, so a busy floor turned one refresh into dozens of round trips.
+ */
+export async function buildBillSummaries(venueId: string): Promise<BillSummary[]> {
+  const visits = await db.tableVisit.findMany({
+    where: { venueId, status: { in: ["open", "bill_requested"] } },
+    orderBy: [{ billRequestedAt: "asc" }, { openedAt: "asc" }],
+    select: {
+      id: true,
+      tableId: true,
+      status: true,
+      openedAt: true,
+      billRequestedAt: true,
+      table: { select: { name: true } },
+      orders: {
+        where: { status: notVoid() },
+        select: {
+          sessionId: true,
+          items: { where: { voidedAt: null }, select: { unitPriceKurus: true, qty: true } },
+        },
+      },
+    },
+  });
+
+  return visits.map((visit) => {
+    let totalKurus = 0;
+    const phones = new Set<string>();
+    for (const order of visit.orders) {
+      phones.add(order.sessionId);
+      for (const item of order.items) totalKurus += item.unitPriceKurus * item.qty;
+    }
+    return {
+      visitId: visit.id,
+      tableId: visit.tableId,
+      tableName: visit.table.name,
+      status: visit.status,
+      openedAt: visit.openedAt,
+      billRequestedAt: visit.billRequestedAt,
+      totalKurus,
+      orderCount: visit.orders.length,
+      phoneCount: phones.size,
+    };
+  });
+}
+
 /** Customer asked for the bill. Idempotent — tapping twice is not an error. */
 export async function requestBill(visitId: string, venueId: string): Promise<boolean> {
   const visit = await db.tableVisit.findFirst({ where: { id: visitId, venueId } });
