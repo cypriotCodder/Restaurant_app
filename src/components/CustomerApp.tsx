@@ -41,6 +41,14 @@ export default function CustomerApp({ code }: { code: string }) {
   // order is actually placed. A retry after a timeout the customer never saw
   // land therefore reuses it, and the server returns the original order.
   const idempotencyKeyRef = useRef<string | null>(null);
+  // Whether this customer has a language of their own — either restored from a
+  // previous visit or picked with the toggle. Until they do, the venue's
+  // configured default wins.
+  const localeChosenRef = useRef(false);
+  const chooseLocale = useCallback((next: Locale) => {
+    localeChosenRef.current = true;
+    setLocale(next);
+  }, []);
 
   // ---------- data loading ----------
   // A 401 on any of these means the table session was revoked or expired. It
@@ -63,7 +71,9 @@ export default function CustomerApp({ code }: { code: string }) {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     if (!menu) return;
-    setLocale((prev) => prev ?? (menu.venue.defaultLocale as Locale));
+    // `locale` always holds a value, so this cannot be a `prev ?? default`
+    // fallback — that never fell through and the venue's setting was ignored.
+    if (!localeChosenRef.current) setLocale(menu.venue.defaultLocale as Locale);
     setActiveCat((c) => c || menu.categories[0]?.id || "");
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [menu]);
@@ -79,7 +89,10 @@ export default function CustomerApp({ code }: { code: string }) {
       const saved = localStorage.getItem(cartKey);
       if (saved) setCart(JSON.parse(saved));
       const savedLocale = localStorage.getItem("locale");
-      if (savedLocale === "en" || savedLocale === "tr") setLocale(savedLocale);
+      if (savedLocale === "en" || savedLocale === "tr") {
+        localeChosenRef.current = true;
+        setLocale(savedLocale);
+      }
     } catch {}
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [cartKey]);
@@ -90,11 +103,20 @@ export default function CustomerApp({ code }: { code: string }) {
     } catch {}
   }, [cart, cartKey]);
 
+  // One timer for the toast slot. Each message used to schedule its own
+  // unclearable timeout, so a second toast arriving behind a first was wiped
+  // early by the first one's expiry — and both outlived the component.
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((message: string, ms = 5000) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = setTimeout(() => setToast(""), ms);
+  }, []);
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
   // Live channel: order status changes + mid-service 86'ing.
-  const esRef = useRef<EventSource | null>(null);
   useEffect(() => {
     const es = new EventSource("/api/session/stream");
-    esRef.current = es;
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
@@ -122,8 +144,7 @@ export default function CustomerApp({ code }: { code: string }) {
     }
     if (res?.status === 401) return setExpired(true);
     // 409 means the desk accepted it between the list rendering and the tap.
-    setToast(t(locale, res?.status === 409 ? "cancelTooLate" : "cancelFailed"));
-    setTimeout(() => setToast(""), 6000);
+    showToast(t(locale, res?.status === 409 ? "cancelTooLate" : "cancelFailed"), 6000);
     await loadOrders();
   }
 
@@ -134,8 +155,7 @@ export default function CustomerApp({ code }: { code: string }) {
     setRequestingBill(false);
     if (res?.ok) {
       await loadBill();
-      setToast(t(locale, "billRequested"));
-      setTimeout(() => setToast(""), 6000);
+      showToast(t(locale, "billRequested"), 6000);
     } else if (res?.status === 401) {
       setExpired(true);
     }
@@ -190,8 +210,7 @@ export default function CustomerApp({ code }: { code: string }) {
       // Network failure: the order may or may not have landed. Keep the key so
       // a retry is resolved as a replay rather than placing a second order.
       setSubmitting(false);
-      setToast(t(locale, "orderFailed"));
-      setTimeout(() => setToast(""), 5000);
+      showToast(t(locale, "orderFailed"));
       return;
     }
     setSubmitting(false);
@@ -201,23 +220,19 @@ export default function CustomerApp({ code }: { code: string }) {
       idempotencyKeyRef.current = null;
       setCart([]);
       setCartOpen(false);
-      setToast(`${t(locale, "orderSubmitted")} ${t(locale, "orderNumber")}${data.number} — ${t(locale, "payAtTill")}`);
+      showToast(`${t(locale, "orderSubmitted")} ${t(locale, "orderNumber")}${data.number} — ${t(locale, "payAtTill")}`);
       setTab("orders");
       loadOrders();
       loadBill();
-      setTimeout(() => setToast(""), 5000);
     } else if (res.status === 401) {
       setExpired(true); // cart stays in localStorage; survives the re-scan
     } else if (res.status === 429) {
-      setToast(t(locale, "rateLimited"));
-      setTimeout(() => setToast(""), 5000);
+      showToast(t(locale, "rateLimited"));
     } else if (res.status === 409) {
-      setToast(locale === "en" ? "An item just sold out — please review your cart." : "Bir ürün tükendi — lütfen sepetinizi kontrol edin.");
+      showToast(locale === "en" ? "An item just sold out — please review your cart." : "Bir ürün tükendi — lütfen sepetinizi kontrol edin.");
       loadMenu();
-      setTimeout(() => setToast(""), 5000);
     } else {
-      setToast(t(locale, "orderFailed"));
-      setTimeout(() => setToast(""), 5000);
+      showToast(t(locale, "orderFailed"));
     }
   }
 
@@ -233,7 +248,7 @@ export default function CustomerApp({ code }: { code: string }) {
         <Header
           menu={menu}
           locale={locale}
-          setLocale={setLocale}
+          setLocale={chooseLocale}
           tab={tab}
           setTab={setTab}
           activeCat={activeCat}

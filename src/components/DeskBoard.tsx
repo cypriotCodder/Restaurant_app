@@ -73,7 +73,18 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   const [changingPassword, setChangingPassword] = useState(false);
   const [editing, setEditing] = useState<DeskOrder | null>(null);
   const [amendmentNotice, setAmendmentNotice] = useState(false);
+  // Failures from the card buttons. Without this a rejected PATCH looked
+  // exactly like a button that did nothing, and staff just pressed it again.
+  const [actionError, setActionError] = useState("");
   const router = useRouter();
+
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showActionError = useCallback((message: string) => {
+    if (errorTimer.current) clearTimeout(errorTimer.current);
+    setActionError(message);
+    errorTimer.current = setTimeout(() => setActionError(""), 6000);
+  }, []);
+  useEffect(() => () => { if (errorTimer.current) clearTimeout(errorTimer.current); }, []);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/desk/orders${showAll ? "?all=1" : ""}`);
@@ -93,6 +104,30 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
     (async () => { await Promise.all([load(), loadBills()]); })();
   }, [load, loadBills]);
 
+  // The current loaders, read through a ref so the stream below does not list
+  // them as dependencies. `load` changes identity whenever the "last 24h"
+  // checkbox moves, which used to close the EventSource and both intervals and
+  // build them again — a live kitchen connection dropped by a checkbox.
+  const loaders = useRef({ load, loadBills });
+  useEffect(() => { loaders.current = { load, loadBills }; }, [load, loadBills]);
+
+  // A rush arrives as a burst of events, and each one used to fire its own pair
+  // of fetches. Collapse anything landing within the same beat into one refresh.
+  const pendingRefresh = useRef({ orders: false, bills: false });
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback((orders: boolean, bills: boolean) => {
+    pendingRefresh.current.orders ||= orders;
+    pendingRefresh.current.bills ||= bills;
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      const due = pendingRefresh.current;
+      pendingRefresh.current = { orders: false, bills: false };
+      if (due.orders) void loaders.current.load();
+      if (due.bills) void loaders.current.loadBills();
+    }, 250);
+  }, []);
+
   // SSE push + elapsed-time repaint every 30s + 60s polling safety net.
   const audioRef = useRef<AudioContext | null>(null);
   useEffect(() => {
@@ -101,26 +136,29 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === "order.created" || msg.type === "bill.requested") beep(audioRef);
-        if (msg.type === "order.created" || msg.type === "order.updated") { load(); loadBills(); }
+        if (msg.type === "order.created" || msg.type === "order.updated") scheduleRefresh(true, true);
         if (msg.type === "bill.requested" || msg.type === "bill.updated" || msg.type === "visit.closed") {
-          loadBills();
+          scheduleRefresh(false, true);
         }
       } catch {}
     };
     const tick = setInterval(() => setNow(Date.now()), 30000);
-    const poll = setInterval(() => { void load(); void loadBills(); }, 60000);
+    const poll = setInterval(() => scheduleRefresh(true, true), 60000);
     return () => {
       es.close();
       clearInterval(tick);
       clearInterval(poll);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-  }, [load, loadBills]);
+  }, [scheduleRefresh]);
 
   async function openBill(visitId: string) {
     setSettleError("");
     setShowSplit(false);
-    const res = await fetch(`/api/desk/bills/${visitId}`);
-    if (res.ok) setSettling((await res.json()).bill);
+    const res = await fetch(`/api/desk/bills/${visitId}`).catch(() => null);
+    if (res?.ok) return setSettling((await res.json()).bill);
+    if (res?.status === 401) return router.push("/login");
+    showActionError("Hesap açılamadı / Could not open the bill");
   }
 
   async function settle(method: "cash" | "card", force = false) {
@@ -182,7 +220,8 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   }
 
   async function dismissBillRequest(visitId: string) {
-    await fetch(`/api/desk/bills/${visitId}`, { method: "PATCH" });
+    const res = await fetch(`/api/desk/bills/${visitId}`, { method: "PATCH" }).catch(() => null);
+    if (!res?.ok) showActionError("Hesap isteği kaldırılamadı / Could not dismiss the request");
     await loadBills();
   }
 
@@ -191,9 +230,28 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, rejectReason }),
-    });
-    if (res.ok) load();
+    }).catch(() => null);
+    if (res?.ok) return void load();
+    if (res?.status === 401) return router.push("/login");
+    // Most often the order moved on another terminal between the render and
+    // the tap, so re-read rather than leaving a stale card on screen.
+    showActionError(
+      res?.status === 409
+        ? "Sipariş bu arada değişti / The order changed in the meantime"
+        : "Durum güncellenemedi / Could not update the order"
+    );
+    void load();
   }
+
+  // Escape backs out of whichever dialog is on top. Staff work this screen at a
+  // keyboard between runs to the pass, and every other way out was a mouse move.
+  useEscapeKey(
+    useCallback(() => {
+      if (editing || settleBusy) return; // the edit dialog handles its own
+      if (settling) return setSettling(null);
+      if (rejecting) return setRejecting(null);
+    }, [editing, settleBusy, settling, rejecting])
+  );
 
   const active = orders.filter((o) => !["served", "rejected", "cancelled"].includes(o.status));
   const done = orders.filter((o) => ["served", "rejected", "cancelled"].includes(o.status));
@@ -244,6 +302,16 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
           Mutfağa DÜZELTME fişi gönderildi — sözlü olarak da bilgi verin.
           <br />
           An AMENDED ticket was sent to the kitchen — tell them verbally too.
+        </div>
+      )}
+
+      {actionError && (
+        <div
+          role="alert"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-3 text-sm"
+          style={{ background: "var(--color-heaven-orange)", color: "#fff", border: "2px solid var(--color-text)" }}
+        >
+          {actionError}
         </div>
       )}
 
@@ -318,11 +386,14 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
           onClick={() => !settleBusy && setSettling(null)}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settle-title"
             className="bg-white p-5 w-full max-w-md max-h-[85vh] overflow-auto"
             style={{ border: "2px solid var(--color-text)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="wordmark text-xl mb-3">{settling.tableName} — HESAP</h2>
+            <h2 id="settle-title" className="wordmark text-xl mb-3">{settling.tableName} — HESAP</h2>
 
             <ul className="text-sm flex flex-col gap-1.5">
               {settling.lines.map((l, i) => (
@@ -436,8 +507,8 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       {rejecting && (
         <div className="fixed inset-0 z-40 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-black/40" onClick={() => setRejecting(null)} aria-label="Kapat" />
-          <div className="relative bg-white p-5 w-full max-w-sm" style={{ border: "2px solid var(--color-text)" }}>
-            <h2 className="wordmark text-lg mb-4">Siparişi Reddet / Reject Order</h2>
+          <div className="relative bg-white p-5 w-full max-w-sm" style={{ border: "2px solid var(--color-text)" }} aria-labelledby="reject-title">
+            <h2 id="reject-title" className="wordmark text-lg mb-4">Siparişi Reddet / Reject Order</h2>
             <div className="flex flex-col gap-3">
               {REJECT_REASONS.map((r) => (
                 <label key={r.value} className="flex items-center gap-3 cursor-pointer">
@@ -563,6 +634,17 @@ function OrderCard({
   );
 }
 
+/** Calls `onEscape` while mounted. Pass a stable callback. */
+function useEscapeKey(onEscape: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onEscape();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onEscape]);
+}
+
 function beep(ref: React.RefObject<AudioContext | null>) {
   try {
     ref.current = ref.current ?? new AudioContext();
@@ -600,6 +682,12 @@ function EditOrderDialog({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEscapeKey(
+    useCallback(() => {
+      if (!busy) onClose();
+    }, [busy, onClose])
+  );
+
   // The kitchen holds paper once a ticket has gone out, so the warning is shown
   // before the change, not after it.
   const alreadySent = order.status !== "received";
@@ -624,11 +712,14 @@ function EditOrderDialog({
       onClick={() => !busy && onClose()}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-order-title"
         className="bg-white p-5 w-full max-w-md max-h-[85vh] overflow-auto"
         style={{ border: "2px solid var(--color-text)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="wordmark text-lg mb-1">
+        <h2 id="edit-order-title" className="wordmark text-lg mb-1">
           #{order.number} · {order.tableName} — DÜZENLE
         </h2>
         {/* The current total. The new one is recomputed server-side from the
