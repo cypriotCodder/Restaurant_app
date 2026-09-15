@@ -3,6 +3,7 @@ import { timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { schedulerState, SWEEP_INTERVAL_MS } from "@/lib/scheduler";
+import { buildVersion } from "@/lib/version";
 
 // Liveness and readiness for the venue's monitoring.
 //
@@ -72,6 +73,9 @@ export async function GET(req: NextRequest) {
     {
       status: ok ? "ok" : "degraded",
       checks,
+      // What is actually running here. A remote update is unverifiable without
+      // it: you restart the service and have no evidence the new code took.
+      build: buildVersion(),
       uptimeSeconds: Math.round(process.uptime()),
       startedAt: sched ? new Date(sched.startedAt).toISOString() : null,
     },
