@@ -10,7 +10,8 @@ deliberately skips HTTPS, certificates, printed QR cards, service supervision
 and backups, because none of them are in the path between an order and a
 printed ticket. Get the printer working first; harden afterwards.
 
-Budget about 90 minutes for a first run, most of it installing Postgres.
+Budget about 90 minutes for a first run, most of it installing Docker Desktop
+(it may ask for a reboot and to enable WSL 2) and configuring the printer share.
 
 ---
 
@@ -214,15 +215,29 @@ mkdir C:\masadan-data\uploads -Force
 
 ### 8. Apply migrations and seed
 
+The bundle already contains `prisma/` (schema, migrations, `seed.mjs`), but
+**not** the Prisma CLI or `bcryptjs`: the build only packs what the running
+server imports. Install those two into the bundle once, with versions pinned to
+match the build. This needs internet on the venue machine; alternatively run it
+in a copy of the bundle on your Mac *before* step 2's USB copy (they are pure
+JavaScript, so a Mac install works on Windows).
+
 ```powershell
 cd C:\masadan
-$env:DATABASE_URL = "postgresql://masadan:choose-a-password@localhost:5432/masadan"
-npx prisma migrate deploy
+npm install --no-save prisma@6.19.3 bcryptjs@3.0.3
 ```
 
-Seeding needs the repo (the bundle has no `prisma/seed.mjs`). Either copy the
-repo across and run `npm run seed`, or create the admin user by hand. **Capture
-the generated admin password — it is printed once and is not recoverable.**
+Then migrate and seed:
+
+```powershell
+$env:DATABASE_URL = "postgresql://masadan:choose-a-password@localhost:5432/masadan"
+npx prisma migrate deploy
+node prisma\seed.mjs
+```
+
+**Capture the generated admin password — it is printed once and is not
+recoverable.** Set `SEED_ADMIN_PASSWORD` beforehand if you would rather choose
+it.
 
 ### 9. Start the app
 
@@ -260,6 +275,7 @@ matters.
 Confirm Windows accepts raw bytes on that share before involving the app:
 
 ```powershell
+mkdir C:\temp -Force
 "TEST`n`n`n" | Out-File -Encoding ascii C:\temp\t.txt
 cmd /c copy /b C:\temp\t.txt \\localhost\KITCHEN
 ```
