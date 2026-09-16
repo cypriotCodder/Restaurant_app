@@ -82,9 +82,13 @@ describe("customer stream filter", () => {
     expect(filter({ type: "menu.changed", venueId: "venue_2" })).toBe(false);
   });
 
-  it("ignores event types the customer has no use for", async () => {
-    const { filter } = await handlers();
-    expect(filter({ type: "session.revoked", venueId: "venue_1", sessionId: "sess_1" })).toBe(false);
+  it("passes a revocation of THIS session and nobody else's", async () => {
+    const { filter, serialize } = await handlers();
+    const mine = { type: "session.revoked", venueId: "venue_1", sessionId: "sess_1" } as const;
+    expect(filter(mine)).toBe(true);
+    expect(await serialize(mine)).toEqual({ type: "session.revoked" });
+    // Another phone at the same table being ended must not knock this one off.
+    expect(filter({ type: "session.revoked", venueId: "venue_1", sessionId: "sess_2" })).toBe(false);
   });
 });
 

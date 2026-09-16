@@ -49,10 +49,10 @@ export default function PosHealthPanel() {
           Mutfak Yazıcısı / Kitchen Printer
         </h3>
         <span
-          className="tag"
+          className="tag on-accent"
+          role="status"
           style={{
             background: alert ? "var(--color-heaven-orange)" : "var(--color-accent)",
-            color: "#fff",
           }}
         >
           {alert ? "DİKKAT / ATTENTION" : "ÇALIŞIYOR / HEALTHY"}

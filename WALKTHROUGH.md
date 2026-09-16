@@ -316,12 +316,21 @@ Turkish text. Then restart the agent pointed at the shim:
 ```powershell
 Remove-Item Env:DRY_RUN
 $env:PRINTER_HOST = "127.0.0.1"
+$env:PRINTER_ACK = "1"
 node C:\masadan\bridge\agent.mjs
 ```
 
 ```
-bridge agent → http://127.0.0.1:3000 → 127.0.0.1:9100
+bridge agent → http://127.0.0.1:3000 → 127.0.0.1:9100 (waiting for shim acks)
 ```
+
+`PRINTER_ACK=1` matters. A network printer accepts bytes and says nothing, so
+by default the agent reports a ticket as printed the moment the TCP write
+completes. The shim, unlike a printer, knows whether the spooler took the job,
+and answers `OK` or `ERR <reason>` on the same socket. With the flag set the
+agent waits for that answer, and a jammed or unplugged printer becomes a failed
+ticket on the desk and in Ayarlar → POS health instead of a green row and no
+paper. Leave it unset only when `PRINTER_HOST` is a real network printer.
 
 ### 13. The actual test
 
@@ -349,7 +358,8 @@ Work along the chain; each stage tells you where it stopped.
 | Agent: `pending fetch` connection refused | Agent → app | App not running, or wrong `BASE_URL`. Check `/api/health`. |
 | Agent: `printer timeout` after 10s | Agent → shim | Shim is not running, or not on 9100. |
 | Shim: `port 9100 is already in use` | — | A second shim is running. Close it. |
-| Shim: `PRINT FAILED ... copy exited 1` | Shim → Windows | Share name wrong or not shared. Re-test step 10. |
+| Shim: `PRINT FAILED ... copy exited 1` | Shim → Windows | Share name wrong or not shared. Re-test step 10. The agent logs the same reason and the ticket is re-queued; it shows as failed on the desk after 5 tries. |
+| Agent: `no print acknowledgement from shim` | Shim → Windows | The spooler took longer than 30s, or an old shim without acks is running. Update the shim, or raise `PRINTER_ACK_TIMEOUT_MS`. |
 | Shim logs success, no paper | Windows → printer | Printer offline, out of paper, or the driver is not Generic / Text Only. |
 | Prints, but Turkish is garbled | Encoding | Driver is not Generic / Text Only — it is rendering rather than passing through. |
 | Queue grows in POS health | Agent not acking | Agent stopped. Restart it; the sweep re-delivers. |

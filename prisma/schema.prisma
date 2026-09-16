@@ -321,11 +321,17 @@ model PosDelivery {
 }
 
 // API keys for on-prem bridge agents pulling the outbox.
+//
+// Only a SHA-256 of the key is stored. The plaintext is shown once at creation
+// and never again, so a database dump or backup cannot hand out the kitchen
+// printer's credential. `hint` keeps the last six characters for telling two
+// keys apart on the settings screen.
 model BridgeKey {
   id        String   @id @default(cuid())
   venueId   String
   venue     Venue    @relation(fields: [venueId], references: [id])
-  key       String   @unique
+  keyHash   String   @unique
+  hint      String   @default("")
   label     String   @default("kitchen-bridge")
   createdAt DateTime @default(now())
 }

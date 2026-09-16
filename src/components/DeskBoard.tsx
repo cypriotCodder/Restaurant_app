@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CurrencyProvider, useMoney } from "./MoneyContext";
+import Dialog from "./Dialog";
 import PasswordChangeDialog from "./PasswordChangeDialog";
 
 type DeskBill = {
@@ -47,7 +48,12 @@ const statusConfig: Record<string, { icon: string; label: string; cls: string }>
   ready: { icon: "○", label: "Ready / Hazır", cls: "tag-outline" },
   served: { icon: "✓", label: "Served / Servis Edildi", cls: "tag-neutral" },
   rejected: { icon: "✕", label: "Rejected / Reddedildi", cls: "tag-neutral" },
+  // The customer withdrew it before the kitchen took it. Distinct from
+  // rejected, which is the kitchen refusing.
+  cancelled: { icon: "✕", label: "Müşteri iptali / Customer cancelled", cls: "tag-neutral" },
 };
+
+const DONE = ["served", "rejected", "cancelled"];
 
 const REJECT_REASONS = [
   { value: "Stokta yok / Item unavailable", label: "Stokta yok / Item unavailable" },
@@ -73,18 +79,28 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   const [changingPassword, setChangingPassword] = useState(false);
   const [editing, setEditing] = useState<DeskOrder | null>(null);
   const [amendmentNotice, setAmendmentNotice] = useState(false);
+  // Whether the live stream is up. The 60s poll keeps the board roughly
+  // current without it, but staff should know they are looking at a delayed
+  // picture rather than trusting a silent screen.
+  const [connected, setConnected] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const router = useRouter();
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/desk/orders${showAll ? "?all=1" : ""}`);
+    const res = await fetch(`/api/desk/orders${showAll ? "?all=1" : ""}`).catch(() => null);
     // The session expired or was revoked from the admin panel mid-shift.
-    if (res.status === 401) return router.push("/login");
-    if (res.ok) setOrders((await res.json()).orders);
+    if (res?.status === 401) return router.push("/login");
+    if (res?.ok) {
+      setOrders((await res.json()).orders);
+      setLoadError(false);
+    } else {
+      setLoadError(true);
+    }
   }, [showAll, router]);
 
   const loadBills = useCallback(async () => {
-    const res = await fetch("/api/desk/bills");
-    if (res.ok) setBills((await res.json()).bills);
+    const res = await fetch("/api/desk/bills").catch(() => null);
+    if (res?.ok) setBills((await res.json()).bills);
   }, []);
 
   useEffect(() => {
@@ -97,9 +113,13 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   const audioRef = useRef<AudioContext | null>(null);
   useEffect(() => {
     const es = new EventSource("/api/desk/stream");
+    es.onopen = () => setConnected(true);
+    // EventSource reconnects on its own; this only surfaces the gap.
+    es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        if (msg.type === "connected") setConnected(true);
         if (msg.type === "order.created" || msg.type === "bill.requested") beep(audioRef);
         if (msg.type === "order.created" || msg.type === "order.updated") { load(); loadBills(); }
         if (msg.type === "bill.requested" || msg.type === "bill.updated" || msg.type === "visit.closed") {
@@ -119,8 +139,8 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   async function openBill(visitId: string) {
     setSettleError("");
     setShowSplit(false);
-    const res = await fetch(`/api/desk/bills/${visitId}`);
-    if (res.ok) setSettling((await res.json()).bill);
+    const res = await fetch(`/api/desk/bills/${visitId}`).catch(() => null);
+    if (res?.ok) setSettling((await res.json()).bill);
   }
 
   async function settle(method: "cash" | "card", force = false) {
@@ -131,20 +151,23 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ paymentMethod: method, force }),
-    });
+    }).catch(() => null);
     setSettleBusy(false);
-    if (res.ok) {
+    if (res?.ok) {
       setSettling(null);
       await Promise.all([load(), loadBills()]);
       return;
     }
-    const body = await res.json().catch(() => ({}));
+    const body = (await res?.json().catch(() => ({}))) ?? {};
     // The common one: staff hit settle while food is still being cooked.
     setSettleError(
       body.error === "orders_in_flight"
         ? "Mutfakta bekleyen sipariş var / Orders still in the kitchen"
-        : "Hesap kapatılamadı / Could not settle"
+        : body.error === "already_closed"
+          ? "Bu masa zaten kapatılmış / This table was already settled"
+          : "Hesap kapatılamadı / Could not settle"
     );
+    if (body.error === "already_closed") void loadBills();
   }
 
   async function saveEdit(orderId: string, lines: { itemId: string; qty: number }[]) {
@@ -152,12 +175,16 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lines }),
-    });
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}));
+    }).catch(() => null);
+    if (!res?.ok) {
+      const b = (await res?.json().catch(() => ({}))) ?? {};
+      // The ticket on screen is stale in both cases; pull the current one so
+      // the next attempt is computed against what is actually there.
+      if (b.error === "conflict" || b.error === "not_editable") void load();
       return (
         {
           not_editable: "Bu sipariş artık düzenlenemez / No longer editable",
+          conflict: "Sipariş az önce değişti — yeniden açın / Order just changed elsewhere; reopen it",
           empties_order: "Tüm kalemler silinemez — siparişi reddedin / Cannot empty an order; reject it instead",
           no_change: "Değişiklik yok / Nothing changed",
           unknown_line: "Geçersiz kalem / Invalid line",
@@ -182,7 +209,7 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   }
 
   async function dismissBillRequest(visitId: string) {
-    await fetch(`/api/desk/bills/${visitId}`, { method: "PATCH" });
+    await fetch(`/api/desk/bills/${visitId}`, { method: "PATCH" }).catch(() => null);
     await loadBills();
   }
 
@@ -191,12 +218,14 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, rejectReason }),
-    });
-    if (res.ok) load();
+    }).catch(() => null);
+    // A 409 means the order moved under us (another screen, or the customer
+    // cancelled); reloading shows what actually happened.
+    if (res) load();
   }
 
-  const active = orders.filter((o) => !["served", "rejected", "cancelled"].includes(o.status));
-  const done = orders.filter((o) => ["served", "rejected", "cancelled"].includes(o.status));
+  const active = orders.filter((o) => !DONE.includes(o.status));
+  const done = orders.filter((o) => DONE.includes(o.status));
 
   const finalReason = reason === "Diğer / Other" ? customReason.trim() : reason;
 
@@ -234,12 +263,25 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
         </div>
       </header>
 
+      {(!connected || loadError) && (
+        <div
+          role="status"
+          className="mb-3 px-3 py-2 text-sm on-orange"
+          style={{ background: "var(--color-heaven-orange)", border: "2px solid var(--color-text)" }}
+        >
+          {loadError
+            ? "Sunucuya ulaşılamıyor — ekran güncel olmayabilir. / Server unreachable; this board may be stale."
+            : "Canlı bağlantı koptu, yeniden bağlanılıyor — siparişler 60 sn gecikebilir. / Live link dropped, reconnecting; orders may lag by up to a minute."}
+        </div>
+      )}
+
       {changingPassword && <PasswordChangeDialog onClose={() => setChangingPassword(false)} />}
 
       {amendmentNotice && (
         <div
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-3 text-sm"
-          style={{ background: "var(--color-heaven-orange)", color: "#fff", border: "2px solid var(--color-text)" }}
+          role="status"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-3 text-sm on-orange"
+          style={{ background: "var(--color-heaven-orange)", border: "2px solid var(--color-text)" }}
         >
           Mutfağa DÜZELTME fişi gönderildi — sözlü olarak da bilgi verin.
           <br />
@@ -276,10 +318,7 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <p className="font-bold">{b.tableName}</p>
                     {requested && (
-                      <span
-                        className="tag"
-                        style={{ background: "var(--color-heaven-orange)", color: "#fff" }}
-                      >
+                      <span className="tag on-orange" style={{ background: "var(--color-heaven-orange)" }}>
                         HESAP {waitingMin > 0 ? `${waitingMin}dk` : ""}
                       </span>
                     )}
@@ -298,6 +337,7 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
                         onClick={() => dismissBillRequest(b.visitId)}
                         className="btn btn-ghost"
                         title="Müşteri vazgeçti / Customer changed their mind"
+                        aria-label="Hesap isteğini kaldır / Dismiss bill request"
                       >
                         ×
                       </button>
@@ -312,108 +352,96 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
 
       {/* Settle dialog */}
       {settling && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center p-4"
-          style={{ background: "rgba(0,0,0,0.5)" }}
-          onClick={() => !settleBusy && setSettling(null)}
-        >
+        <Dialog title={`${settling.tableName} — HESAP`} onClose={() => setSettling(null)} busy={settleBusy}>
+          <ul className="text-sm flex flex-col gap-1.5">
+            {settling.lines.map((l, i) => (
+              <li key={i} className="flex justify-between gap-3">
+                <span>
+                  {l.qty} × {l.name}
+                  {l.modifiers.length > 0 && (
+                    <span style={{ color: "var(--color-neutral-900)" }}>
+                      {" "}({l.modifiers.join(", ")})
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0">{money(l.lineTotalKurus)}</span>
+              </li>
+            ))}
+          </ul>
+
           <div
-            className="bg-white p-5 w-full max-w-md max-h-[85vh] overflow-auto"
-            style={{ border: "2px solid var(--color-text)" }}
-            onClick={(e) => e.stopPropagation()}
+            className="flex justify-between font-bold text-xl mt-3 pt-3"
+            style={{ borderTop: "2px solid var(--color-text)" }}
           >
-            <h2 className="wordmark text-xl mb-3">{settling.tableName} — HESAP</h2>
+            <span>TOPLAM</span>
+            <span>{money(settling.totalKurus)}</span>
+          </div>
 
-            <ul className="text-sm flex flex-col gap-1.5">
-              {settling.lines.map((l, i) => (
-                <li key={i} className="flex justify-between gap-3">
-                  <span>
-                    {l.qty} × {l.name}
-                    {l.modifiers.length > 0 && (
-                      <span style={{ color: "var(--color-neutral-900)" }}>
-                        {" "}({l.modifiers.join(", ")})
-                      </span>
-                    )}
-                  </span>
-                  <span className="shrink-0">{money(l.lineTotalKurus)}</span>
-                </li>
-              ))}
-            </ul>
-
-            <div
-              className="flex justify-between font-bold text-xl mt-3 pt-3"
-              style={{ borderTop: "2px solid var(--color-text)" }}
-            >
-              <span>TOPLAM</span>
-              <span>{money(settling.totalKurus)}</span>
+          {/* "We're paying separately" — a view, not separate settlements. */}
+          {settling.phones.length > 1 && (
+            <div className="mt-3">
+              <button onClick={() => setShowSplit((v) => !v)} className="btn-ghost text-sm" aria-expanded={showSplit}>
+                {showSplit ? "▾" : "▸"} Telefona göre / By phone ({settling.phones.length})
+              </button>
+              {showSplit && (
+                <ul className="text-sm mt-2 flex flex-col gap-1 pl-3">
+                  {settling.phones.map((p) => (
+                    <li key={p.sessionId} className="flex justify-between">
+                      <span style={{ color: "var(--color-neutral-900)" }}>{p.label}</span>
+                      <span>{money(p.totalKurus)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
+          )}
 
-            {/* "We're paying separately" — a view, not separate settlements. */}
-            {settling.phones.length > 1 && (
-              <div className="mt-3">
-                <button onClick={() => setShowSplit((v) => !v)} className="btn-ghost text-sm">
-                  {showSplit ? "▾" : "▸"} Telefona göre / By phone ({settling.phones.length})
+          {settleError && (
+            <div className="mt-3" role="alert">
+              <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>
+                {settleError}
+              </p>
+              {settleError.startsWith("Mutfakta") && (
+                <button
+                  onClick={() => settle("cash", true)}
+                  disabled={settleBusy}
+                  className="btn btn-ghost mt-1 text-sm"
+                >
+                  Yine de kapat / Close anyway (nakit)
                 </button>
-                {showSplit && (
-                  <ul className="text-sm mt-2 flex flex-col gap-1 pl-3">
-                    {settling.phones.map((p) => (
-                      <li key={p.sessionId} className="flex justify-between">
-                        <span style={{ color: "var(--color-neutral-900)" }}>{p.label}</span>
-                        <span>{money(p.totalKurus)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {settleError && (
-              <div className="mt-3">
-                <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>
-                  {settleError}
-                </p>
-                {settleError.startsWith("Mutfakta") && (
-                  <button
-                    onClick={() => settle("cash", true)}
-                    disabled={settleBusy}
-                    className="btn btn-ghost mt-1 text-sm"
-                  >
-                    Yine de kapat / Close anyway (nakit)
-                  </button>
-                )}
-              </div>
-            )}
-
-            <p className="text-xs mt-4 mb-2" style={{ color: "var(--color-neutral-900)" }}>
-              Ödeme alındıktan sonra kapatın. Masa boşalır ve telefonlar kapanır.
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => settle("cash")}
-                disabled={settleBusy}
-                className="btn btn-primary flex-1 justify-center py-3"
-              >
-                NAKİT / CASH
-              </button>
-              <button
-                onClick={() => settle("card")}
-                disabled={settleBusy}
-                className="btn btn-secondary flex-1 justify-center py-3"
-              >
-                KART / CARD
-              </button>
+              )}
             </div>
+          )}
+
+          <p className="text-xs mt-4 mb-2" style={{ color: "var(--color-neutral-900)" }}>
+            Ödeme alındıktan sonra kapatın. Masa boşalır ve telefonlar kapanır.
+          </p>
+          <div className="flex gap-2">
             <button
-              onClick={() => setSettling(null)}
+              onClick={() => settle("cash")}
               disabled={settleBusy}
-              className="btn btn-ghost w-full justify-center mt-2"
+              className="btn btn-primary flex-1 justify-center py-3"
+              data-autofocus
             >
-              Vazgeç / Cancel
+              NAKİT / CASH
+            </button>
+            <button
+              onClick={() => settle("card")}
+              disabled={settleBusy}
+              className="btn btn-secondary flex-1 justify-center py-3"
+            >
+              KART / CARD
             </button>
           </div>
-        </div>
+          <button
+            onClick={() => setSettling(null)}
+            disabled={settleBusy}
+            className="btn btn-ghost w-full justify-center mt-2"
+          >
+            Vazgeç / Cancel
+          </button>
+        </Dialog>
       )}
-
 
       {active.length === 0 && !showAll && (
         <p className="text-center py-20" style={{ color: "var(--color-neutral-900)" }}>Aktif sipariş yok — yeni siparişler anında burada belirir.</p>
@@ -434,48 +462,46 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
 
       {/* Reject modal with radio options */}
       {rejecting && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <button className="absolute inset-0 bg-black/40" onClick={() => setRejecting(null)} aria-label="Kapat" />
-          <div className="relative bg-white p-5 w-full max-w-sm" style={{ border: "2px solid var(--color-text)" }}>
-            <h2 className="wordmark text-lg mb-4">Siparişi Reddet / Reject Order</h2>
-            <div className="flex flex-col gap-3">
-              {REJECT_REASONS.map((r) => (
-                <label key={r.value} className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="reject-reason"
-                    value={r.value}
-                    checked={reason === r.value}
-                    onChange={() => setReason(r.value)}
-                    className="h-5 w-5"
-                  />
-                  <span>{r.label}</span>
-                </label>
-              ))}
-              {reason === "Diğer / Other" && (
+        <Dialog title="Siparişi Reddet / Reject Order" onClose={() => setRejecting(null)} width="max-w-sm">
+          <fieldset className="flex flex-col gap-3">
+            <legend className="sr-only">Sebep / Reason</legend>
+            {REJECT_REASONS.map((r) => (
+              <label key={r.value} className="flex items-center gap-3 cursor-pointer">
                 <input
-                  autoFocus
-                  value={customReason}
-                  onChange={(e) => setCustomReason(e.target.value)}
-                  placeholder="Sebep yazın / Enter reason"
-                  className="input w-full"
+                  type="radio"
+                  name="reject-reason"
+                  value={r.value}
+                  checked={reason === r.value}
+                  onChange={() => setReason(r.value)}
+                  className="h-5 w-5"
                 />
-              )}
-            </div>
-            <div className="flex gap-2 justify-end mt-5">
-              <button onClick={() => setRejecting(null)} className="btn btn-secondary">
-                Vazgeç / Cancel
-              </button>
-              <button
-                disabled={!finalReason}
-                onClick={() => { transition(rejecting, "rejected", finalReason); setRejecting(null); }}
-                className="btn btn-danger"
-              >
-                Reddet / Reject
-              </button>
-            </div>
+                <span>{r.label}</span>
+              </label>
+            ))}
+            {reason === "Diğer / Other" && (
+              <input
+                autoFocus
+                value={customReason}
+                onChange={(e) => setCustomReason(e.target.value)}
+                placeholder="Sebep yazın / Enter reason"
+                aria-label="Sebep / Reason"
+                className="input w-full"
+              />
+            )}
+          </fieldset>
+          <div className="flex gap-2 justify-end mt-5">
+            <button onClick={() => setRejecting(null)} className="btn btn-secondary">
+              Vazgeç / Cancel
+            </button>
+            <button
+              disabled={!finalReason}
+              onClick={() => { transition(rejecting, "rejected", finalReason); setRejecting(null); }}
+              className="btn btn-danger"
+            >
+              Reddet / Reject
+            </button>
           </div>
-        </div>
+        </Dialog>
       )}
     </div>
     </CurrencyProvider>
@@ -501,7 +527,7 @@ function OrderCard({
   const cfg = statusConfig[o.status] ?? { icon: "?", label: o.status, cls: "tag-neutral" };
 
   return (
-    <div className="card" style={["served", "rejected", "cancelled"].includes(o.status) ? { opacity: 0.6 } : undefined}>
+    <div className="card" style={DONE.includes(o.status) ? { opacity: 0.6 } : undefined}>
       <div className="flex items-start justify-between mb-1">
         <div>
           <p className="text-lg font-bold leading-tight">{o.tableName}</p>
@@ -618,101 +644,88 @@ function EditOrderDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={() => !busy && onClose()}
-    >
-      <div
-        className="bg-white p-5 w-full max-w-md max-h-[85vh] overflow-auto"
-        style={{ border: "2px solid var(--color-text)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="wordmark text-lg mb-1">
-          #{order.number} · {order.tableName} — DÜZENLE
-        </h2>
-        {/* The current total. The new one is recomputed server-side from the
-            stored line prices, so it is not guessed at here. */}
-        <p className="text-sm font-bold">{money(order.totalKurus)}</p>
-        <p className="text-xs mb-3" style={{ color: "var(--color-neutral-900)" }}>
-          Adet azaltılabilir veya kalem silinebilir. Ekleme için yeni sipariş alın.
+    <Dialog title={`#${order.number} · ${order.tableName} — DÜZENLE`} onClose={onClose} busy={busy}>
+      {/* The current total. The new one is recomputed server-side from the
+          stored line prices, so it is not guessed at here. */}
+      <p className="text-sm font-bold">{money(order.totalKurus)}</p>
+      <p className="text-xs mb-3" style={{ color: "var(--color-neutral-900)" }}>
+        Adet azaltılabilir veya kalem silinebilir. Ekleme için yeni sipariş alın.
+      </p>
+
+      {alreadySent && (
+        <p
+          className="text-sm mb-3 p-2"
+          style={{ border: "2px solid var(--color-heaven-orange)", color: "var(--color-heaven-orange)" }}
+        >
+          Bu siparişin fişi mutfağa gitti. Değişiklik sonrası DÜZELTME fişi basılır —
+          mutfağa sözlü olarak da haber verin.
+          <br />
+          <span style={{ color: "var(--color-neutral-900)" }}>
+            The kitchen already has a ticket for this order. An amended ticket will print;
+            tell them verbally as well.
+          </span>
         </p>
+      )}
 
-        {alreadySent && (
-          <p
-            className="text-sm mb-3 p-2"
-            style={{ border: "2px solid var(--color-heaven-orange)", color: "var(--color-heaven-orange)" }}
-          >
-            Bu siparişin fişi mutfağa gitti. Değişiklik sonrası DÜZELTME fişi basılır —
-            mutfağa sözlü olarak da haber verin.
-            <br />
-            <span style={{ color: "var(--color-neutral-900)" }}>
-              The kitchen already has a ticket for this order. An amended ticket will print;
-              tell them verbally as well.
+      <ul className="flex flex-col gap-2">
+        {order.items.map((i) => (
+          <li key={i.id} className="flex items-center justify-between gap-3 text-sm">
+            <span style={qty[i.id] === 0 ? { textDecoration: "line-through", opacity: 0.5 } : undefined}>
+              {i.name}
+              {i.modifiers.length > 0 && (
+                <span style={{ color: "var(--color-neutral-900)" }}> ({i.modifiers.join(", ")})</span>
+              )}
+              {i.note && <span style={{ color: "var(--color-accent-700)" }}> — {i.note}</span>}
             </span>
-          </p>
-        )}
+            <span className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setQty({ ...qty, [i.id]: Math.max(0, qty[i.id] - 1) })}
+                disabled={qty[i.id] === 0}
+                className="btn btn-ghost"
+                aria-label={`${i.name} azalt`}
+              >
+                −
+              </button>
+              <span className="font-bold w-6 text-center" aria-live="polite">{qty[i.id]}</span>
+              <button
+                onClick={() => setQty({ ...qty, [i.id]: Math.min(i.qty, qty[i.id] + 1) })}
+                disabled={qty[i.id] >= i.qty}
+                className="btn btn-ghost"
+                title="Artırmak için yeni sipariş alın"
+                aria-label={`${i.name} artır`}
+              >
+                +
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
 
-        <ul className="flex flex-col gap-2">
-          {order.items.map((i) => (
-            <li key={i.id} className="flex items-center justify-between gap-3 text-sm">
-              <span style={qty[i.id] === 0 ? { textDecoration: "line-through", opacity: 0.5 } : undefined}>
-                {i.name}
-                {i.modifiers.length > 0 && (
-                  <span style={{ color: "var(--color-neutral-900)" }}> ({i.modifiers.join(", ")})</span>
-                )}
-                {i.note && <span style={{ color: "var(--color-accent-700)" }}> — {i.note}</span>}
-              </span>
-              <span className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => setQty({ ...qty, [i.id]: Math.max(0, qty[i.id] - 1) })}
-                  disabled={qty[i.id] === 0}
-                  className="btn btn-ghost"
-                  aria-label={`${i.name} azalt`}
-                >
-                  −
-                </button>
-                <span className="font-bold w-6 text-center">{qty[i.id]}</span>
-                <button
-                  onClick={() => setQty({ ...qty, [i.id]: Math.min(i.qty, qty[i.id] + 1) })}
-                  disabled={qty[i.id] >= i.qty}
-                  className="btn btn-ghost"
-                  title="Artırmak için yeni sipariş alın"
-                  aria-label={`${i.name} artır`}
-                >
-                  +
-                </button>
-              </span>
-            </li>
+      {order.edits.length > 0 && (
+        <div className="mt-3 pt-3 text-xs" style={{ borderTop: "1px solid var(--color-divider)", color: "var(--color-neutral-900)" }}>
+          {order.edits.map((e, n) => (
+            <p key={n}>
+              {e.staffName}: {e.changes.map((c) => `${c.name} ${c.fromQty}→${c.toQty}`).join(", ")}
+              {e.afterPrint ? " (fiş sonrası)" : ""}
+            </p>
           ))}
-        </ul>
-
-        {order.edits.length > 0 && (
-          <div className="mt-3 pt-3 text-xs" style={{ borderTop: "1px solid var(--color-divider)", color: "var(--color-neutral-900)" }}>
-            {order.edits.map((e, n) => (
-              <p key={n}>
-                {e.staffName}: {e.changes.map((c) => `${c.name} ${c.fromQty}→${c.toQty}`).join(", ")}
-                {e.afterPrint ? " (fiş sonrası)" : ""}
-              </p>
-            ))}
-          </div>
-        )}
-
-        {error && <p className="text-sm mt-3" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
-
-        <div className="flex gap-2 mt-4">
-          <button
-            onClick={save}
-            disabled={busy || changed.length === 0}
-            className="btn btn-primary flex-1 justify-center py-3"
-          >
-            {busy ? "..." : changed.length === 0 ? "Değişiklik yok" : "Kaydet / Save"}
-          </button>
-          <button onClick={onClose} disabled={busy} className="btn btn-ghost">
-            Vazgeç
-          </button>
         </div>
+      )}
+
+      {error && <p className="text-sm mt-3" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+
+      <div className="flex gap-2 mt-4">
+        <button
+          onClick={save}
+          disabled={busy || changed.length === 0}
+          className="btn btn-primary flex-1 justify-center py-3"
+        >
+          {busy ? "..." : changed.length === 0 ? "Değişiklik yok" : "Kaydet / Save"}
+        </button>
+        <button onClick={onClose} disabled={busy} className="btn btn-ghost">
+          Vazgeç
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }

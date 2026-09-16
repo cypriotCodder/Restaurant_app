@@ -1,5 +1,6 @@
 import { db } from "./db";
 import type { NextRequest } from "next/server";
+import { clientIp } from "./rateLimit";
 
 /** Abuse-analysis ledger: every order/scan attempt, successful or not. */
 export async function logAttempt(
@@ -17,7 +18,9 @@ export async function logAttempt(
     await db.orderAttempt.create({
       data: {
         outcome,
-        ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "",
+        // Same attribution rule as the rate limiter, so the ledger records the
+        // proxy-written hop when there is one.
+        ip: clientIp(req),
         userAgent: req.headers.get("user-agent") ?? "",
         detail: extra.detail ?? "",
         venueId: extra.venueId,

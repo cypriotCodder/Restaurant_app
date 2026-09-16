@@ -40,10 +40,37 @@ export function ExpiredScreen({ locale }: { locale: Locale }) {
   );
 }
 
-export function LoadingScreen() {
+/**
+ * The menu could not be loaded for a reason other than a dead session. This
+ * used to fall through to the loading dot forever, which on a phone looks
+ * exactly like a broken QR code — and was mistaken for one more than once.
+ */
+export function ErrorScreen({ locale, onRetry }: { locale: Locale; onRetry: () => void }) {
   return (
-    <main className="flex-1 flex items-center justify-center">
+    <main className="flex-1 flex items-center justify-center p-6" role="alert">
+      <div className="max-w-sm text-center flex flex-col items-center gap-4">
+        <div
+          className="h-14 w-14 flex items-center justify-center text-2xl font-bold"
+          style={{ border: "2px solid var(--color-heaven-orange)", color: "var(--color-heaven-orange)" }}
+          aria-hidden
+        >
+          !
+        </div>
+        <h1 className="wordmark text-lg">{t(locale, "loadFailedTitle")}</h1>
+        <p style={{ color: "var(--color-neutral-900)" }}>{t(locale, "loadFailedBody")}</p>
+        <button onClick={onRetry} className="btn btn-primary">
+          {t(locale, "retry")}
+        </button>
+      </div>
+    </main>
+  );
+}
+
+export function LoadingScreen({ locale }: { locale: Locale }) {
+  return (
+    <main className="flex-1 flex flex-col items-center justify-center gap-3" aria-busy="true">
       <div className="h-2 w-2 rounded-full animate-pulse" style={{ background: "var(--color-accent)" }} />
+      <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "loading")}</p>
     </main>
   );
 }

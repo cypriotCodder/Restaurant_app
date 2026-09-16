@@ -19,7 +19,11 @@ export default function OrdersList({
 }) {
   return (
     <div className="px-4 pt-4 flex flex-col gap-3">
-      {orders.length === 0 && <p className="text-center pt-10" style={{ color: "var(--color-neutral-900)" }}>—</p>}
+      {orders.length === 0 && (
+        <p className="text-center pt-10" style={{ color: "var(--color-neutral-900)" }}>
+          {t(locale, "noOrdersYet")}
+        </p>
+      )}
       {orders.map((o) => (
         <div key={o.id} className="card">
           <div className="flex items-center justify-between mb-2">

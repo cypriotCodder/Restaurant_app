@@ -188,7 +188,7 @@ revisiting at several venues, not at one.
 
 **Virtualised lists.** With the order log paged at 50 rows nothing renders a
 list long enough to justify a windowing library, and the customer menu's
-category anchors (`#cat-<id>`) would break. See `work_order.md`.
+category anchors (`#cat-<id>`) would break. See `docs/archive/work_order.md`.
 
 ---
 

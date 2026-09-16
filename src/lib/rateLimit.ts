@@ -11,6 +11,11 @@
 
 type Window = { count: number; resetAt: number };
 
+// Read directly rather than through getEnv(): the limiter is imported by every
+// unauthenticated route and must not couple those to full env validation in
+// tests. src/lib/env.ts still validates the value at boot.
+const trustProxy = () => process.env.TRUST_PROXY === "1";
+
 const globalForLimiter = globalThis as unknown as { limiterMemory?: Map<string, Window> };
 const windows = (globalForLimiter.limiterMemory ??= new Map<string, Window>());
 
@@ -60,13 +65,37 @@ export function resetRateLimits(): void {
 }
 
 /**
- * Best-effort client IP. Behind the venue's reverse proxy this is the
- * X-Forwarded-For the proxy sets; "" when it cannot be determined.
+ * Best-effort client IP. "" when it cannot be determined.
+ *
+ * X-Forwarded-For is client-controlled unless a proxy we run rewrites it.
+ * Next fills the header from the socket only when the client sent none, so a
+ * client can always plant a first hop. With TRUST_PROXY=1 the proxy has
+ * appended the real address as the LAST hop and that is what is read;
+ * otherwise the first hop is the best available and every per-IP limit is
+ * advisory — which is why the unauthenticated write paths also carry a
+ * venue-wide cap that does not depend on the address at all.
  */
 export function clientIp(req: Request): string {
-  return (
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip")?.trim() ||
-    ""
-  );
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const hops = forwarded.split(",").map((h) => h.trim()).filter(Boolean);
+    if (hops.length > 0) return trustProxy() ? hops[hops.length - 1] : hops[0];
+  }
+  return req.headers.get("x-real-ip")?.trim() || "";
+}
+
+/**
+ * A budget for writes an anonymous caller can trigger: the per-IP window plus
+ * a global one, so a client rotating forged addresses is still bounded by the
+ * global cap. Returns true when a write may proceed.
+ */
+export function writeBudget(
+  scope: string,
+  ip: string,
+  perIp: { limit: number; windowSec: number },
+  global: { limit: number; windowSec: number }
+): boolean {
+  const byIp = rateLimit(`${scope}:ip:${ip || "unknown"}`, perIp.limit, perIp.windowSec).allowed;
+  const overall = rateLimit(`${scope}:all`, global.limit, global.windowSec).allowed;
+  return byIp && overall;
 }

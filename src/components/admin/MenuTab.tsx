@@ -5,36 +5,53 @@ import { useState } from "react";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
 import { useMoney } from "../MoneyContext";
+import Dialog, { ConfirmDialog } from "../Dialog";
 import ItemEditor from "./ItemEditor";
 import type { AdminCategory, AdminItem } from "./types";
+
 export default function MenuTab() {
   const money = useMoney();
-  const { data, mutate } = useSWR<{ categories: AdminCategory[] }>("/api/admin/categories", swrDefaults);
+  const { data, error: loadError, mutate } = useSWR<{ categories: AdminCategory[] }>("/api/admin/categories", swrDefaults);
   const categories = data?.categories ?? [];
   const [editing, setEditing] = useState<AdminItem | "new" | null>(null);
   const [newCat, setNewCat] = useState("");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("");
+  const [editingCat, setEditingCat] = useState<AdminCategory | null>(null);
+  const [deletingItem, setDeletingItem] = useState<AdminItem | null>(null);
+  const [deletingCat, setDeletingCat] = useState<AdminCategory | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
+  async function call(url: string, init: RequestInit, failMessage: string): Promise<boolean> {
+    setBusy(true);
+    setError("");
+    const res = await fetch(url, init).catch(() => null);
+    setBusy(false);
+    if (!res?.ok) {
+      const b = (await res?.json().catch(() => ({}))) ?? {};
+      setError(b.error === "category_not_empty" ? "Kategori boş değil — önce ürünleri taşıyın veya silin. / Category is not empty; move or delete its items first." : failMessage);
+      return false;
+    }
+    await mutate();
+    return true;
+  }
+
+  const json = (method: string, body: unknown): RequestInit => ({
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
   async function addCategory() {
     if (!newCat.trim()) return;
-    await fetch("/api/admin/categories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nameTr: newCat.trim(), sortOrder: categories.length }),
-    });
-    setNewCat("");
-    mutate();
+    if (await call("/api/admin/categories", json("POST", { nameTr: newCat.trim(), sortOrder: categories.length }), "Kategori eklenemedi / Could not add category")) {
+      setNewCat("");
+    }
   }
 
   async function toggleAvailable(item: AdminItem) {
-    await fetch(`/api/admin/items/${item.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ available: !item.available }),
-    });
-    mutate();
+    await call(`/api/admin/items/${item.id}`, json("PATCH", { available: !item.available }), "Güncellenemedi / Could not update");
   }
 
   // Flatten all items + apply search & category filter
@@ -56,6 +73,7 @@ export default function MenuTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Ara / Search"
+            aria-label="Ara / Search"
             className="input"
             style={{ width: 200 }}
           />
@@ -65,13 +83,22 @@ export default function MenuTab() {
         </div>
       </div>
 
+      {loadError && (
+        <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>
+          Menü yüklenemedi — sayfayı yenileyin. / Could not load the menu; reload the page.
+        </p>
+      )}
+      {error && (
+        <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>
+      )}
+
       {/* Category filter pills */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={() => setFilterCat("")} className={`tag ${!filterCat ? "tag-accent" : "tag-neutral"}`}>
+      <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Kategori filtresi">
+        <button onClick={() => setFilterCat("")} className={`tag ${!filterCat ? "tag-accent" : "tag-neutral"}`} aria-pressed={!filterCat}>
           Tümü
         </button>
         {categories.map(c => (
-          <button key={c.id} onClick={() => setFilterCat(c.id)} className={`tag ${filterCat === c.id ? "tag-accent" : "tag-neutral"}`}>
+          <button key={c.id} onClick={() => setFilterCat(c.id)} className={`tag ${filterCat === c.id ? "tag-accent" : "tag-neutral"}`} aria-pressed={filterCat === c.id}>
             {c.nameTr}
           </button>
         ))}
@@ -83,39 +110,34 @@ export default function MenuTab() {
           value={newCat}
           onChange={(e) => setNewCat(e.target.value)}
           placeholder="Yeni kategori adı / New category name"
+          aria-label="Yeni kategori adı / New category name"
           className="input flex-1"
           onKeyDown={(e) => e.key === "Enter" && addCategory()}
         />
-        <button onClick={addCategory} className="btn btn-secondary">
+        <button onClick={addCategory} disabled={busy} className="btn btn-secondary">
           Kategori Ekle
         </button>
       </div>
 
-      {/* Category management links */}
+      {/* Category management */}
       {categories.length > 0 && (
         <div className="flex flex-wrap gap-3 text-sm">
           {categories.map(c => (
             <span key={c.id} className="flex items-center gap-2">
               <span className="font-medium">{c.nameTr}</span>
+              <button onClick={() => setEditingCat(c)} className="btn-ghost text-xs">
+                Düzenle
+              </button>
               <button
-                onClick={async () => {
-                  await fetch(`/api/admin/categories/${c.id}`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ active: !c.active }),
-                  });
-                  mutate();
-                }}
+                onClick={() => call(`/api/admin/categories/${c.id}`, json("PATCH", { active: !c.active }), "Güncellenemedi / Could not update")}
+                disabled={busy}
                 className="btn-ghost text-xs"
               >
                 {c.active ? "Gizle" : "Göster"}
               </button>
               <button
-                onClick={async () => {
-                  const res = await fetch(`/api/admin/categories/${c.id}`, { method: "DELETE" });
-                  if (!res.ok) alert("Kategori boş değil — önce ürünleri taşıyın/silin.");
-                  mutate();
-                }}
+                onClick={() => setDeletingCat(c)}
+                disabled={busy}
                 className="text-xs font-medium"
                 style={{ color: "var(--color-heaven-orange)" }}
               >
@@ -132,12 +154,12 @@ export default function MenuTab() {
         <table className="table">
           <thead>
             <tr>
-              <th style={{ width: 50 }}></th>
+              <th style={{ width: 50 }}><span className="sr-only">Fotoğraf</span></th>
               <th>ÜRÜN / ITEM</th>
               <th>FİYAT / PRICE</th>
               <th>KATEGORİ</th>
               <th>UYGUNLUK / AVAILABILITY</th>
-              <th></th>
+              <th><span className="sr-only">İşlemler</span></th>
             </tr>
           </thead>
           <tbody>
@@ -151,7 +173,7 @@ export default function MenuTab() {
                     {i.photoUrl ? (
                       <Image src={i.photoUrl} alt="" fill sizes="40px" className="object-cover" />
                     ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4" aria-hidden>
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
                       </svg>
                     )}
@@ -168,7 +190,7 @@ export default function MenuTab() {
                 <td>{i.catName}</td>
                 <td>
                   <label className="toggle">
-                    <input type="checkbox" checked={i.available} onChange={() => toggleAvailable(i)} />
+                    <input type="checkbox" checked={i.available} onChange={() => toggleAvailable(i)} aria-label={`${i.nameTr} uygun / available`} />
                     <span className="toggle-track" />
                   </label>
                 </td>
@@ -177,11 +199,7 @@ export default function MenuTab() {
                     Düzenle / Edit
                   </button>
                   <button
-                    onClick={async () => {
-                      if (!confirm(`"${i.nameTr}" silinsin mi?`)) return;
-                      await fetch(`/api/admin/items/${i.id}`, { method: "DELETE" });
-                      mutate();
-                    }}
+                    onClick={() => setDeletingItem(i)}
                     className="ml-3 text-sm"
                     style={{ color: "var(--color-heaven-orange)" }}
                   >
@@ -193,7 +211,7 @@ export default function MenuTab() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={6} className="text-center py-8" style={{ color: "var(--color-neutral-900)" }}>
-                  {search ? "Sonuç bulunamadı / No results" : "Henüz ürün yok / No items yet"}
+                  {data === undefined ? "Yükleniyor… / Loading…" : search ? "Sonuç bulunamadı / No results" : "Henüz ürün yok / No items yet"}
                 </td>
               </tr>
             )}
@@ -209,6 +227,113 @@ export default function MenuTab() {
           onSaved={() => { setEditing(null); mutate(); }}
         />
       )}
+
+      {editingCat && (
+        <CategoryDialog
+          category={editingCat}
+          onClose={() => setEditingCat(null)}
+          onSave={async (values) => {
+            const ok = await call(`/api/admin/categories/${editingCat.id}`, json("PATCH", values), "Kategori kaydedilemedi / Could not save category");
+            if (ok) setEditingCat(null);
+            return ok;
+          }}
+        />
+      )}
+
+      {deletingItem && (
+        <ConfirmDialog
+          title="Ürün silinsin mi? / Delete item?"
+          body={
+            <>
+              <strong>{deletingItem.nameTr}</strong> menüden kaldırılır. Geçmiş siparişlerde adı geçiyorsa
+              silinmek yerine gizlenir.
+              <br />
+              Removed from the menu; hidden instead if it appears in past orders.
+            </>
+          }
+          confirmLabel="Sil / Delete"
+          danger
+          busy={busy}
+          onConfirm={async () => {
+            await call(`/api/admin/items/${deletingItem.id}`, { method: "DELETE" }, "Silinemedi / Could not delete");
+            setDeletingItem(null);
+          }}
+          onCancel={() => setDeletingItem(null)}
+        />
+      )}
+
+      {deletingCat && (
+        <ConfirmDialog
+          title="Kategori silinsin mi? / Delete category?"
+          body={<><strong>{deletingCat.nameTr}</strong> — yalnızca boş bir kategori silinebilir. / Only an empty category can be deleted.</>}
+          confirmLabel="Sil / Delete"
+          danger
+          busy={busy}
+          onConfirm={async () => {
+            await call(`/api/admin/categories/${deletingCat.id}`, { method: "DELETE" }, "Silinemedi / Could not delete");
+            setDeletingCat(null);
+          }}
+          onCancel={() => setDeletingCat(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/** Rename a category, give it an English name, or reorder it. */
+function CategoryDialog({
+  category,
+  onClose,
+  onSave,
+}: {
+  category: AdminCategory;
+  onClose: () => void;
+  onSave: (values: { nameTr: string; nameEn: string; sortOrder: number }) => Promise<boolean>;
+}) {
+  const [nameTr, setNameTr] = useState(category.nameTr);
+  const [nameEn, setNameEn] = useState(category.nameEn);
+  const [sortOrder, setSortOrder] = useState(String(category.sortOrder));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!nameTr.trim()) {
+      setError("İsim gerekli / Name required");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const ok = await onSave({
+      nameTr: nameTr.trim(),
+      nameEn: nameEn.trim() || nameTr.trim(),
+      sortOrder: Number(sortOrder) || 0,
+    });
+    setBusy(false);
+    if (!ok) setError("Kaydedilemedi / Could not save");
+  }
+
+  return (
+    <Dialog title="Kategoriyi Düzenle / Edit Category" onClose={onClose} busy={busy} width="max-w-sm">
+      <form onSubmit={submit} className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-sm">
+          İsim (TR)
+          <input value={nameTr} onChange={(e) => setNameTr(e.target.value)} className="input" required data-autofocus />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Name (EN)
+          <input value={nameEn} onChange={(e) => setNameEn(e.target.value)} className="input" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Sıra / Order
+          <input type="number" min={0} value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className="input" />
+        </label>
+        {error && <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+        <div className="flex gap-2 justify-end mt-1">
+          <button type="button" onClick={onClose} disabled={busy} className="btn btn-secondary">Vazgeç</button>
+          <button disabled={busy} className="btn btn-primary">{busy ? "..." : "Kaydet / Save"}</button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

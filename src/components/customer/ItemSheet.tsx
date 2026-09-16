@@ -158,7 +158,7 @@ export default function ItemSheet({
           }
           className="btn btn-primary flex-1 justify-center py-3.5"
         >
-          {locale === "en" ? "ADD TO CART" : "SEPETE EKLE"} · {money(unit * qty)}
+          {t(locale, "addToCartCta").toLocaleUpperCase(locale)} · {money(unit * qty)}
         </button>
       </div>
     </Sheet>

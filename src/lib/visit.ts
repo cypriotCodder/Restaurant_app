@@ -47,7 +47,12 @@ export type Bill = {
   /** Per-phone breakdown, for "we're paying separately". */
   phones: BillPhone[];
   orderCount: number;
+  /** Exactly the orders the total covers; settlement marks these paid. */
+  orderIds: string[];
 };
+
+/** Either the shared client or an interactive-transaction client. */
+type Client = Pick<typeof db, "tableVisit" | "order" | "tableSession">;
 
 /**
  * The open visit for a table, creating one if the table is idle.
@@ -85,8 +90,8 @@ export async function openOrJoinVisit(tableId: string, venueId: string): Promise
 }
 
 /** Itemised bill for a visit, with the per-phone split. */
-export async function buildBill(visitId: string): Promise<Bill | null> {
-  const visit = await db.tableVisit.findUnique({
+export async function buildBill(visitId: string, client: Client = db): Promise<Bill | null> {
+  const visit = await client.tableVisit.findUnique({
     where: { id: visitId },
     include: {
       table: { select: { id: true, name: true } },
@@ -141,6 +146,7 @@ export async function buildBill(visitId: string): Promise<Bill | null> {
     totalKurus: lines.reduce((s, l) => s + l.lineTotalKurus, 0),
     phones,
     orderCount: visit.orders.length,
+    orderIds: visit.orders.map((o) => o.id),
   };
 }
 
@@ -176,33 +182,38 @@ export type SettleResult =
 
 /**
  * Staff took payment at the till. Closes the visit, records what was taken,
- * marks every order paid, and revokes the party's sessions so the table is free
- * for the next group.
+ * marks the billed orders paid, and revokes the party's sessions so the table
+ * is free for the next group.
+ *
+ * Everything runs in one transaction, and the close itself is conditional on
+ * the visit still being open: two tills settling the same table, or an order
+ * arriving between the bill being totalled and the visit closing, cannot
+ * produce a second settlement or an order marked paid that no one paid for.
  */
 export async function settleVisit(
   visitId: string,
   venueId: string,
   input: { paymentMethod: "cash" | "card"; paidAmountKurus?: number; staffId: string; force?: boolean }
 ): Promise<SettleResult> {
-  const visit = await db.tableVisit.findFirst({ where: { id: visitId, venueId } });
-  if (!visit) return { ok: false, error: "not_found" };
-  if (visit.status === "closed") return { ok: false, error: "already_closed" };
+  const outcome = await db.$transaction(async (tx) => {
+    const visit = await tx.tableVisit.findFirst({ where: { id: visitId, venueId } });
+    if (!visit) return { ok: false, error: "not_found" } as const;
+    if (visit.status === "closed") return { ok: false, error: "already_closed" } as const;
 
-  // Closing a table whose food is still being cooked is almost always a
-  // mis-tap. Staff can override deliberately.
-  if (!input.force) {
-    const inFlight = await db.order.count({
-      where: { visitId, status: { in: IN_FLIGHT_STATUSES } },
-    });
-    if (inFlight > 0) return { ok: false, error: "orders_in_flight" };
-  }
+    // Closing a table whose food is still being cooked is almost always a
+    // mis-tap. Staff can override deliberately.
+    if (!input.force) {
+      const inFlight = await tx.order.count({
+        where: { visitId, status: { in: IN_FLIGHT_STATUSES } },
+      });
+      if (inFlight > 0) return { ok: false, error: "orders_in_flight" } as const;
+    }
 
-  const bill = await buildBill(visitId);
-  const totalKurus = bill?.totalKurus ?? 0;
+    const bill = await buildBill(visitId, tx);
+    const totalKurus = bill?.totalKurus ?? 0;
 
-  await db.$transaction([
-    db.tableVisit.update({
-      where: { id: visitId },
+    const { count } = await tx.tableVisit.updateMany({
+      where: { id: visitId, status: { not: "closed" } },
       data: {
         status: "closed",
         closedAt: new Date(),
@@ -214,20 +225,26 @@ export async function settleVisit(
         closedByStaffId: input.staffId,
         billRequestedAt: null,
       },
-    }),
-    db.order.updateMany({
-      where: { visitId, status: notVoid() },
+    });
+    if (count === 0) return { ok: false, error: "already_closed" } as const;
+
+    // Only the orders the total actually covered. One that landed after the
+    // bill was built stays unpaid and visible on the desk.
+    await tx.order.updateMany({
+      where: { id: { in: bill?.orderIds ?? [] } },
       data: { paymentStatus: "paid", paymentProvider: input.paymentMethod },
-    }),
+    });
     // The party has paid and left; their phones must not keep ordering.
-    db.tableSession.updateMany({
+    await tx.tableSession.updateMany({
       where: { visitId, revokedAt: null },
       data: { revokedAt: new Date() },
-    }),
-  ]);
+    });
+    return { ok: true, totalKurus, tableId: visit.tableId } as const;
+  });
 
-  publish({ type: "visit.closed", venueId, visitId, tableId: visit.tableId });
-  return { ok: true, totalKurus };
+  if (!outcome.ok) return outcome;
+  publish({ type: "visit.closed", venueId, visitId, tableId: outcome.tableId });
+  return { ok: true, totalKurus: outcome.totalKurus };
 }
 
 /**

@@ -17,14 +17,19 @@ const orderUpdateMany = vi.fn();
 const sessionUpdateMany = vi.fn();
 const publish = vi.fn();
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  // Settlement runs in an interactive transaction whose client is the same
+  // set of mocks, so assertions read the same spies either way. The
+  // conditional close (updateMany) is routed to `visitUpdate` so the settle
+  // tests keep reading its data.
+  const client = {
     tableVisit: {
       findFirst: (...a: unknown[]) => visitFindFirst(...a),
       findMany: (...a: unknown[]) => visitFindMany(...a),
       findUnique: (...a: unknown[]) => visitFindUnique(...a),
       create: (...a: unknown[]) => visitCreate(...a),
       update: (...a: unknown[]) => visitUpdate(...a),
+      updateMany: (...a: unknown[]) => visitUpdate(...a),
       delete: (...a: unknown[]) => visitDelete(...a),
     },
     order: {
@@ -32,9 +37,11 @@ vi.mock("@/lib/db", () => ({
       updateMany: (...a: unknown[]) => orderUpdateMany(...a),
     },
     tableSession: { updateMany: (...a: unknown[]) => sessionUpdateMany(...a) },
-    $transaction: async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[]),
-  },
-}));
+    $transaction: async (arg: unknown) =>
+      typeof arg === "function" ? arg(client) : Promise.all(arg as Promise<unknown>[]),
+  };
+  return { db: client };
+});
 vi.mock("@/lib/bus", () => ({ publish: (...a: unknown[]) => publish(...a) }));
 
 const { openOrJoinVisit, buildBill, settleVisit, requestBill, closeAbandonedVisits, ABANDON_AFTER_MS } =
@@ -62,7 +69,7 @@ function visitWithOrders(orders: unknown[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  visitUpdate.mockResolvedValue({});
+  visitUpdate.mockResolvedValue({ count: 1 });
   orderUpdateMany.mockResolvedValue({ count: 0 });
   sessionUpdateMany.mockResolvedValue({ count: 0 });
   orderCount.mockResolvedValue(0);
@@ -180,12 +187,18 @@ describe("settleVisit", () => {
     expect(data.closedByStaffId).toBe("staff_7");
   });
 
-  it("marks the orders paid and revokes the party's phones", async () => {
+  it("marks exactly the billed orders paid and revokes the party's phones", async () => {
     visitFindFirst.mockResolvedValue({ id: "visit_1", status: "open", tableId: "table_1" });
-    visitFindUnique.mockResolvedValue(visitWithOrders([{ sessionId: "s1", items: [item("Kahve", 1, 9000)] }]));
+    visitFindUnique.mockResolvedValue(
+      visitWithOrders([{ id: "o1", sessionId: "s1", items: [item("Kahve", 1, 9000)] }])
+    );
     await settleVisit("visit_1", "venue_1", settleInput);
 
-    expect(orderUpdateMany.mock.calls[0][0].data.paymentStatus).toBe("paid");
+    const paid = orderUpdateMany.mock.calls[0][0];
+    expect(paid.data.paymentStatus).toBe("paid");
+    // By id, not by visit: an order placed after the bill was totalled must
+    // not be marked paid for money nobody handed over.
+    expect(paid.where).toEqual({ id: { in: ["o1"] } });
     // The party has paid and left; their phones must not keep ordering.
     expect(sessionUpdateMany.mock.calls[0][0].where).toMatchObject({ visitId: "visit_1", revokedAt: null });
   });
@@ -196,6 +209,21 @@ describe("settleVisit", () => {
       ok: false,
       error: "already_closed",
     });
+  });
+
+  it("loses the race to a second till cleanly", async () => {
+    // Both tills read "open"; the other one's close lands first, so ours
+    // matches no row. Nothing is marked paid twice and nothing is published.
+    visitFindFirst.mockResolvedValue({ id: "visit_1", status: "open", tableId: "table_1" });
+    visitFindUnique.mockResolvedValue(visitWithOrders([]));
+    visitUpdate.mockResolvedValue({ count: 0 });
+    expect(await settleVisit("visit_1", "venue_1", settleInput)).toEqual({
+      ok: false,
+      error: "already_closed",
+    });
+    expect(visitUpdate.mock.calls[0][0].where).toEqual({ id: "visit_1", status: { not: "closed" } });
+    expect(orderUpdateMany).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("refuses a visit belonging to another venue", async () => {

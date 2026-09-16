@@ -33,6 +33,18 @@ body {
   color: var(--color-text);
 }
 
+/* Pinch-zoom stays enabled for the page; buttons just skip the 300ms
+   double-tap-to-zoom delay so quantity steppers feel immediate. */
+button, a.btn, .seg-opt {
+  touch-action: manipulation;
+}
+
+/* Category anchors are reached from a sticky header; without this the heading
+   lands underneath it. Header height plus the tab row plus the category rail. */
+section[id^="cat-"] {
+  scroll-margin-top: 150px;
+}
+
 /* ── wordmark ── */
 .wordmark {
   font-family: var(--font-heading);
@@ -91,10 +103,16 @@ body {
   justify-content: center;
   border-radius: 999px;
 }
+/* Dark text on the orange: white on #f0621d is 3.3:1, below the 4.5:1 body
+   text needs; the dark ink reads at 5:1 and the fill still says "danger". */
 .btn-danger {
   background: var(--color-heaven-orange);
   border-color: var(--color-heaven-orange);
-  color: #fff;
+  color: #201e1d;
+}
+/* Same rule for anything painted in the brand orange or amber. */
+.on-orange, .on-accent {
+  color: #201e1d;
 }
 .btn:disabled {
   opacity: 0.4;
@@ -267,7 +285,8 @@ body {
 }
 .admin-sidebar-item.active {
   background: var(--color-accent);
-  color: #fff;
+  /* White on the amber was 1.9:1 — unreadable in sunlight on a till screen. */
+  color: #201e1d;
   font-weight: 700;
 }
 .admin-sidebar-item.active::before {
@@ -294,6 +313,47 @@ body {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+}
+
+/* A manager checks the admin from a phone between shifts. Under 768px the
+   sidebar becomes a horizontal rail above the content instead of a fixed
+   240px column that squeezed the page into a few hundred pixels. */
+@media (max-width: 768px) {
+  .admin-layout {
+    flex-direction: column;
+  }
+  .admin-sidebar {
+    width: 100%;
+    padding: 12px 0;
+    border-right: none;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .admin-sidebar nav {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 4px;
+    padding: 0 12px;
+  }
+  .admin-sidebar-item {
+    width: auto;
+    white-space: nowrap;
+    padding: 8px 12px;
+  }
+  .admin-sidebar .mt-auto {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-top: 8px;
+    gap: 4px 12px;
+  }
+  .admin-content {
+    padding: 16px;
+  }
+  .admin-topbar {
+    padding: 8px 16px;
+  }
+  .stat-card {
+    min-width: calc(50% - 6px);
+  }
 }
 
 /* ── stat cards ── */
@@ -391,7 +451,7 @@ body {
   align-items: center;
   justify-content: center;
   background: var(--color-accent);
-  color: #fff;
+  color: #201e1d;
   border: none;
   cursor: pointer;
   font-size: 18px;

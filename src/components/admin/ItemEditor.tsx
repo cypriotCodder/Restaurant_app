@@ -2,7 +2,9 @@
 
 import Image from "next/image";
 import { useState } from "react";
+import Dialog from "../Dialog";
 import type { AdminCategory, AdminGroup, AdminItem } from "./types";
+
 export default function ItemEditor({
   item,
   categories,
@@ -27,24 +29,30 @@ export default function ItemEditor({
   });
   const [groups, setGroups] = useState<AdminGroup[]>(item?.modifierGroups ?? []);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
 
   const set = (k: string, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
 
   async function uploadPhoto(file: File) {
+    setUploading(true);
+    setError("");
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch("/api/admin/upload", { method: "POST", body: fd });
-    if (res.ok) set("photoUrl", (await res.json()).url);
-    else alert("Yükleme başarısız (jpg/png/webp, max 4MB)");
+    const res = await fetch("/api/admin/upload", { method: "POST", body: fd }).catch(() => null);
+    setUploading(false);
+    if (res?.ok) set("photoUrl", (await res.json()).url);
+    else setError("Yükleme başarısız (jpg/png/webp, en fazla 4MB) / Upload failed (jpg/png/webp, max 4MB)");
   }
 
   async function save() {
     const priceKurus = Math.round(parseFloat(form.priceTl.replace(",", ".")) * 100);
     if (!form.nameTr.trim() || !Number.isFinite(priceKurus) || priceKurus < 0) {
-      alert("İsim ve geçerli fiyat zorunlu.");
+      setError("İsim ve geçerli fiyat zorunlu. / A name and a valid price are required.");
       return;
     }
     setBusy(true);
+    setError("");
     const payload = {
       categoryId: form.categoryId,
       nameTr: form.nameTr.trim(),
@@ -72,97 +80,109 @@ export default function ItemEditor({
       method: item ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
+    }).catch(() => null);
     setBusy(false);
-    if (res.ok) onSaved();
-    else alert("Kaydedilemedi.");
+    if (res?.ok) onSaved();
+    else setError("Kaydedilemedi. / Could not save.");
   }
 
   const inputCls = "input w-full";
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto p-4" role="dialog" aria-modal="true">
-      <button className="fixed inset-0 bg-black/40" onClick={onClose} aria-label="Kapat" />
-      <div className="relative bg-white p-5 w-full max-w-xl my-8" style={{ border: "2px solid var(--color-text)" }}>
-        <h2 className="wordmark text-lg mb-4">{item ? "Ürünü Düzenle / Edit Item" : "Yeni Ürün / New Item"}</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="col-span-2 text-sm">
-            Kategori
-            <select value={form.categoryId} onChange={(e) => set("categoryId", e.target.value)} className={inputCls}>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.nameTr}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">İsim (TR)<input value={form.nameTr} onChange={(e) => set("nameTr", e.target.value)} className={inputCls} /></label>
-          <label className="text-sm">Name (EN)<input value={form.nameEn} onChange={(e) => set("nameEn", e.target.value)} className={inputCls} /></label>
-          <label className="text-sm">Açıklama (TR)<input value={form.descTr} onChange={(e) => set("descTr", e.target.value)} className={inputCls} /></label>
-          <label className="text-sm">Description (EN)<input value={form.descEn} onChange={(e) => set("descEn", e.target.value)} className={inputCls} /></label>
-          <label className="text-sm">Fiyat (TL)<input inputMode="decimal" value={form.priceTl} onChange={(e) => set("priceTl", e.target.value)} className={inputCls} /></label>
-          <label className="text-sm">Etiketler (virgülle: vegan,glutensiz)<input value={form.tags} onChange={(e) => set("tags", e.target.value)} className={inputCls} /></label>
-          <div className="col-span-2 text-sm">
-            Fotoğraf
-            <div className="flex items-center gap-3 mt-1">
-              {form.photoUrl && (
-                <Image
-                  src={form.photoUrl}
-                  alt=""
-                  width={56}
-                  height={56}
-                  className="h-14 w-14 object-cover"
-                  style={{ border: "1px solid var(--color-divider)" }}
-                />
-              )}
-              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0])} />
-              {form.photoUrl && (
-                <button onClick={() => set("photoUrl", "")} className="text-xs" style={{ color: "var(--color-heaven-orange)" }}>Kaldır</button>
-              )}
-            </div>
+    <Dialog
+      title={item ? "Ürünü Düzenle / Edit Item" : "Yeni Ürün / New Item"}
+      onClose={onClose}
+      busy={busy || uploading}
+      width="max-w-xl"
+      align="start"
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <label className="col-span-2 text-sm">
+          Kategori
+          <select value={form.categoryId} onChange={(e) => set("categoryId", e.target.value)} className={inputCls}>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.nameTr}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">İsim (TR)<input value={form.nameTr} onChange={(e) => set("nameTr", e.target.value)} className={inputCls} data-autofocus /></label>
+        <label className="text-sm">Name (EN)<input value={form.nameEn} onChange={(e) => set("nameEn", e.target.value)} className={inputCls} /></label>
+        <label className="text-sm">Açıklama (TR)<input value={form.descTr} onChange={(e) => set("descTr", e.target.value)} className={inputCls} /></label>
+        <label className="text-sm">Description (EN)<input value={form.descEn} onChange={(e) => set("descEn", e.target.value)} className={inputCls} /></label>
+        <label className="text-sm">Fiyat (TL)<input inputMode="decimal" value={form.priceTl} onChange={(e) => set("priceTl", e.target.value)} className={inputCls} /></label>
+        <label className="text-sm">Etiketler (virgülle: vegan,glutensiz)<input value={form.tags} onChange={(e) => set("tags", e.target.value)} className={inputCls} /></label>
+        <div className="col-span-2 text-sm">
+          Fotoğraf
+          <div className="flex items-center gap-3 mt-1">
+            {form.photoUrl && (
+              <Image
+                src={form.photoUrl}
+                alt=""
+                width={56}
+                height={56}
+                className="h-14 w-14 object-cover"
+                style={{ border: "1px solid var(--color-divider)" }}
+              />
+            )}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              aria-label="Fotoğraf yükle / Upload photo"
+              disabled={uploading}
+              onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0])}
+            />
+            {uploading && <span className="text-xs" role="status">Yükleniyor… / Uploading…</span>}
+            {form.photoUrl && (
+              <button type="button" onClick={() => set("photoUrl", "")} className="text-xs" style={{ color: "var(--color-heaven-orange)" }}>Kaldır</button>
+            )}
           </div>
-        </div>
-
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-bold text-sm">Seçenek Grupları (boyut, ekstralar…)</h3>
-            <button
-              onClick={() => setGroups((g) => [...g, { nameTr: "", nameEn: "", minSelect: 0, maxSelect: 1, options: [{ nameTr: "", nameEn: "", priceDeltaKurus: 0 }] }])}
-              className="btn-ghost text-sm"
-            >
-              + Grup
-            </button>
-          </div>
-          {groups.map((g, gi) => (
-            <div key={gi} className="p-3 mb-2" style={{ border: "1px solid var(--color-divider)" }}>
-              <div className="grid grid-cols-2 gap-2 mb-2">
-                <input placeholder="Grup adı (TR)" value={g.nameTr} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, nameTr: e.target.value } : x))} className={inputCls} />
-                <input placeholder="Group name (EN)" value={g.nameEn} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, nameEn: e.target.value } : x))} className={inputCls} />
-                <label className="text-xs">Min seçim
-                  <input type="number" min={0} value={g.minSelect} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, minSelect: Number(e.target.value) || 0 } : x))} className={inputCls} />
-                </label>
-                <label className="text-xs">Max seçim
-                  <input type="number" min={1} value={g.maxSelect} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, maxSelect: Number(e.target.value) || 1 } : x))} className={inputCls} />
-                </label>
-              </div>
-              {g.options.map((o, oi) => (
-                <div key={oi} className="flex gap-2 mb-1.5">
-                  <input placeholder="Seçenek (TR)" value={o.nameTr} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.map((y, j) => j === oi ? { ...y, nameTr: e.target.value } : y) } : x))} className={inputCls} />
-                  <input placeholder="+TL" inputMode="decimal" value={o.priceDeltaKurus ? (o.priceDeltaKurus / 100).toString() : ""} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.map((y, j) => j === oi ? { ...y, priceDeltaKurus: Math.round((parseFloat(e.target.value.replace(",", ".")) || 0) * 100) } : y) } : x))} className="input w-24" />
-                  <button onClick={() => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.filter((_, j) => j !== oi) } : x))} className="px-2" style={{ color: "var(--color-heaven-orange)" }} aria-label="Seçeneği sil">✕</button>
-                </div>
-              ))}
-              <div className="flex justify-between">
-                <button onClick={() => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: [...x.options, { nameTr: "", nameEn: "", priceDeltaKurus: 0 }] } : x))} className="btn-ghost text-sm">+ Seçenek</button>
-                <button onClick={() => setGroups((gs) => gs.filter((_, i) => i !== gi))} className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>Grubu sil</button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex justify-end gap-2 mt-5">
-          <button onClick={onClose} className="btn btn-secondary">Vazgeç</button>
-          <button onClick={save} disabled={busy} className="btn btn-primary">
-            {busy ? "..." : "Kaydet / Save"}
-          </button>
         </div>
       </div>
-    </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-bold text-sm">Seçenek Grupları (boyut, ekstralar…)</h3>
+          <button
+            type="button"
+            onClick={() => setGroups((g) => [...g, { nameTr: "", nameEn: "", minSelect: 0, maxSelect: 1, options: [{ nameTr: "", nameEn: "", priceDeltaKurus: 0 }] }])}
+            className="btn-ghost text-sm"
+          >
+            + Grup
+          </button>
+        </div>
+        {groups.map((g, gi) => (
+          <div key={gi} className="p-3 mb-2" style={{ border: "1px solid var(--color-divider)" }}>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <input placeholder="Grup adı (TR)" aria-label="Grup adı (TR)" value={g.nameTr} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, nameTr: e.target.value } : x))} className={inputCls} />
+              <input placeholder="Group name (EN)" aria-label="Group name (EN)" value={g.nameEn} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, nameEn: e.target.value } : x))} className={inputCls} />
+              <label className="text-xs">Min seçim
+                <input type="number" min={0} value={g.minSelect} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, minSelect: Number(e.target.value) || 0 } : x))} className={inputCls} />
+              </label>
+              <label className="text-xs">Max seçim
+                <input type="number" min={1} value={g.maxSelect} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, maxSelect: Number(e.target.value) || 1 } : x))} className={inputCls} />
+              </label>
+            </div>
+            {g.options.map((o, oi) => (
+              <div key={oi} className="flex gap-2 mb-1.5">
+                <input placeholder="Seçenek (TR)" aria-label="Seçenek (TR)" value={o.nameTr} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.map((y, j) => j === oi ? { ...y, nameTr: e.target.value } : y) } : x))} className={inputCls} />
+                <input placeholder="+TL" aria-label="Fiyat farkı (TL)" inputMode="decimal" value={o.priceDeltaKurus ? (o.priceDeltaKurus / 100).toString() : ""} onChange={(e) => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.map((y, j) => j === oi ? { ...y, priceDeltaKurus: Math.round((parseFloat(e.target.value.replace(",", ".")) || 0) * 100) } : y) } : x))} className="input w-24" />
+                <button type="button" onClick={() => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: x.options.filter((_, j) => j !== oi) } : x))} className="px-2" style={{ color: "var(--color-heaven-orange)" }} aria-label="Seçeneği sil">✕</button>
+              </div>
+            ))}
+            <div className="flex justify-between">
+              <button type="button" onClick={() => setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, options: [...x.options, { nameTr: "", nameEn: "", priceDeltaKurus: 0 }] } : x))} className="btn-ghost text-sm">+ Seçenek</button>
+              <button type="button" onClick={() => setGroups((gs) => gs.filter((_, i) => i !== gi))} className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>Grubu sil</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="text-sm mt-3" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+
+      <div className="flex justify-end gap-2 mt-5">
+        <button type="button" onClick={onClose} disabled={busy} className="btn btn-secondary">Vazgeç</button>
+        <button type="button" onClick={save} disabled={busy || uploading} className="btn btn-primary">
+          {busy ? "..." : "Kaydet / Save"}
+        </button>
+      </div>
+    </Dialog>
   );
 }

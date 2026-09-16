@@ -18,6 +18,7 @@ const MANAGED = [
   "DATABASE_URL",
   "NEXT_PUBLIC_BASE_URL",
   "UPLOAD_DIR",
+  "TRUST_PROXY",
 ] as const;
 
 let saved: NodeJS.ProcessEnv;

@@ -96,7 +96,10 @@ export async function requireStaff(role: "admin" | "desk" = "desk"): Promise<Sta
   return staff;
 }
 
-export async function loginStaff(email: string, password: string): Promise<string | null> {
+export async function loginStaff(
+  email: string,
+  password: string
+): Promise<{ token: string; role: "admin" | "desk" } | null> {
   const bcrypt = await import("bcryptjs");
   const user = await db.staffUser.findUnique({ where: { email } });
   if (!user) return null;
@@ -104,13 +107,15 @@ export async function loginStaff(email: string, password: string): Promise<strin
   // reveal which addresses have been switched off.
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok || !user.active) return null;
-  return createStaffToken({
+  const role = user.role as "admin" | "desk";
+  const token = await createStaffToken({
     sub: user.id,
     venueId: user.venueId,
-    role: user.role as "admin" | "desk",
+    role,
     name: user.name,
     ver: user.tokenVersion,
   });
+  return { token, role };
 }
 
 export const STAFF_COOKIE = COOKIE;

@@ -43,6 +43,13 @@ const BRIDGE_KEY = process.env.BRIDGE_KEY;
 const PRINTER_HOST = process.env.PRINTER_HOST;
 const PRINTER_PORT = Number(process.env.PRINTER_PORT ?? 9100);
 const DRY_RUN = process.env.DRY_RUN === "1";
+// PRINTER_ACK=1 when the far end is bridge/win-usb-print.mjs rather than a real
+// network printer. The shim replies "OK" or "ERR <reason>" once the spooler has
+// taken (or refused) the bytes; a network printer replies nothing and closes.
+// Without this, a USB print that fails after the TCP write was acked as sent
+// and the ticket was lost without a trace.
+const PRINTER_ACK = process.env.PRINTER_ACK === "1";
+const ACK_TIMEOUT_MS = Number(process.env.PRINTER_ACK_TIMEOUT_MS ?? 30000);
 const POLL_MS = 3000;
 
 if (!BRIDGE_KEY) {
@@ -56,11 +63,31 @@ if (!PRINTER_HOST && !DRY_RUN) {
 
 function printRaw(bytes) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      err ? reject(err) : resolve();
+    };
+    let reply = "";
     const sock = net.createConnection({ host: PRINTER_HOST, port: PRINTER_PORT }, () => {
-      sock.end(bytes, () => resolve());
+      // Half-close: our side is done sending, the far end may still answer.
+      sock.end(bytes, () => {
+        if (!PRINTER_ACK) finish();
+      });
     });
-    sock.setTimeout(10000, () => { sock.destroy(); reject(new Error("printer timeout")); });
-    sock.on("error", reject);
+    sock.setTimeout(PRINTER_ACK ? ACK_TIMEOUT_MS : 10000, () =>
+      finish(new Error(PRINTER_ACK ? "no print acknowledgement from shim" : "printer timeout"))
+    );
+    sock.on("data", (d) => { reply += d.toString("utf8"); });
+    sock.on("end", () => {
+      if (!PRINTER_ACK) return finish();
+      const line = reply.trim();
+      if (line.startsWith("OK")) return finish();
+      finish(new Error(line ? line.slice(0, 200) : "shim closed without acknowledging"));
+    });
+    sock.on("error", finish);
   });
 }
 
@@ -72,7 +99,20 @@ async function ack(deliveryId, ok, error) {
   }).catch((e) => console.error("ack failed:", e.message));
 }
 
+// One tick at a time: a slow print must not let the next interval open a
+// second connection to the same printer.
+let ticking = false;
 async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    await tickOnce();
+  } finally {
+    ticking = false;
+  }
+}
+
+async function tickOnce() {
   const res = await fetch(`${BASE_URL}/api/bridge/pending`, {
     headers: { "x-bridge-key": BRIDGE_KEY },
   });
@@ -96,6 +136,9 @@ async function tick() {
   }
 }
 
-console.log(`bridge agent → ${BASE_URL} → ${DRY_RUN ? "DRY RUN" : `${PRINTER_HOST}:${PRINTER_PORT}`}`);
+console.log(
+  `bridge agent → ${BASE_URL} → ${DRY_RUN ? "DRY RUN" : `${PRINTER_HOST}:${PRINTER_PORT}`}` +
+    (PRINTER_ACK ? " (waiting for shim acks)" : "")
+);
 setInterval(() => tick().catch((e) => console.error("tick:", e.message)), POLL_MS);
 tick().catch((e) => console.error("tick:", e.message));

@@ -39,12 +39,15 @@ export async function POST(req: NextRequest) {
   const byAccount = rateLimit(accountKey(normalized), ACCOUNT_LIMIT, ACCOUNT_WINDOW_SEC);
   if (!byAccount.allowed) return tooMany(byAccount.retryAfterSec);
 
-  const token = await loginStaff(normalized, password);
-  if (!token) {
+  const login = await loginStaff(normalized, password);
+  if (!login) {
     return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
   }
+  const { token, role } = login;
 
-  const res = NextResponse.json({ ok: true });
+  // The role decides the landing page: a manager goes to the admin panel, the
+  // kitchen to the board. The client used to send everyone to /desk.
+  const res = NextResponse.json({ ok: true, role, redirect: role === "admin" ? "/admin" : "/desk" });
   res.cookies.set(STAFF_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",

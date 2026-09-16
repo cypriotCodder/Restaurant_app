@@ -30,7 +30,7 @@ export default function CartSheet({
   submitting: boolean;
 }) {
   return (
-    <Sheet onClose={() => setCartOpen(false)} title={locale === "en" ? "Your Order" : "Siparişiniz / Your Order"}>
+    <Sheet onClose={() => setCartOpen(false)} title={t(locale, "yourOrder")}>
       {cart.length === 0 ? (
         <p className="text-center py-8" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "empty")}</p>
       ) : (
@@ -86,11 +86,11 @@ export default function CartSheet({
           {/* pricing breakdown */}
           <div className="mt-4 flex flex-col gap-1 text-sm" style={{ borderTop: "2px solid var(--color-text)", paddingTop: "12px" }}>
             <div className="flex justify-between">
-              <span>{locale === "en" ? "Subtotal" : "Ara Toplam / Subtotal"}</span>
+              <span>{t(locale, "subtotal")}</span>
               <span>{money(cartTotal)}</span>
             </div>
             <div className="flex justify-between font-bold text-lg mt-2">
-              <span>{locale === "en" ? "Total" : "Toplam / Total"}</span>
+              <span>{t(locale, "total")}</span>
               <span>{money(cartTotal)}</span>
             </div>
           </div>
@@ -100,9 +100,7 @@ export default function CartSheet({
             disabled={submitting}
             className="btn btn-primary w-full justify-center py-4 text-sm"
           >
-            {submitting
-              ? locale === "en" ? "SENDING..." : "GÖNDERİLİYOR..."
-              : locale === "en" ? "SUBMIT ORDER" : "SİPARİŞİ GÖNDER · SUBMIT ORDER"}
+            {(submitting ? t(locale, "sending") : t(locale, "submitOrder")).toLocaleUpperCase(locale)}
           </button>
         </>
       )}

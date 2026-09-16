@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { db, type Prisma } from "@/lib/db";
 import { CLAIM_TIMEOUT_MS, MAX_ATTEMPTS } from "@/lib/pos/outbox";
+import { venueForBridgeKey } from "@/lib/bridgeKey";
 
 // Pull endpoint for the on-prem bridge agent (bridge/agent.mjs). The agent
 // authenticates with its venue-scoped key, claims pending ESC/POS payloads,
@@ -9,15 +10,8 @@ import { CLAIM_TIMEOUT_MS, MAX_ATTEMPTS } from "@/lib/pos/outbox";
 
 const BATCH = 10;
 
-async function venueForKey(req: NextRequest): Promise<string | null> {
-  const key = req.headers.get("x-bridge-key");
-  if (!key) return null;
-  const row = await db.bridgeKey.findUnique({ where: { key } });
-  return row?.venueId ?? null;
-}
-
 export async function GET(req: NextRequest) {
-  const venueId = await venueForKey(req);
+  const venueId = await venueForBridgeKey(req.headers.get("x-bridge-key"));
   if (!venueId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const staleBefore = new Date(Date.now() - CLAIM_TIMEOUT_MS);

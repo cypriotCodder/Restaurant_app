@@ -13,6 +13,11 @@ import { IN_FLIGHT_STATUSES } from "./orderStatus";
 // Two things are never trusted from the client: prices, which are recomputed
 // from the stored line snapshots, and the resulting total, which is derived
 // here rather than sent.
+//
+// Two staff can open the same ticket at once. Every write is conditional on
+// the quantity (and status) the edit was computed against, so the second edit
+// to land is refused as a conflict instead of applying stale arithmetic on
+// top of the first.
 
 /**
  * Editable through the kitchen states, not after the food has been handed over.
@@ -37,9 +42,11 @@ export type EditResult =
   | { ok: true; totalKurus: number; changes: LineChange[]; afterPrint: boolean }
   | {
       ok: false;
-      error: "not_found" | "not_editable" | "unknown_line" | "no_change" | "empties_order";
+      error: "not_found" | "not_editable" | "unknown_line" | "no_change" | "empties_order" | "conflict";
       status?: string;
     };
+
+class EditConflict extends Error {}
 
 export async function editOrder(
   orderId: string,
@@ -66,6 +73,7 @@ export async function editOrder(
   }
 
   const changes: LineChange[] = [];
+  const edits: { id: string; fromQty: number; toQty: number }[] = [];
   for (const l of input.lines) {
     const item = byId.get(l.itemId)!;
     // Quantities may only go down. Increasing is an addition, which belongs in
@@ -73,6 +81,7 @@ export async function editOrder(
     if (l.qty > item.qty) return { ok: false, error: "unknown_line" };
     if (l.qty !== item.qty) {
       changes.push({ name: item.nameSnapshot, fromQty: item.qty, toQty: l.qty });
+      edits.push({ id: item.id, fromQty: item.qty, toQty: l.qty });
     }
   }
   if (changes.length === 0) return { ok: false, error: "no_change" };
@@ -97,26 +106,38 @@ export async function editOrder(
   const afterPrint = order.deliveries.length > 0;
   const now = new Date();
 
-  await db.$transaction([
-    ...input.lines
-      .filter((l) => l.qty !== byId.get(l.itemId)!.qty)
-      .map((l) =>
-        db.orderItem.update({
-          where: { id: l.itemId },
-          data: l.qty === 0 ? { qty: 0, voidedAt: now } : { qty: l.qty },
-        })
-      ),
-    db.order.update({ where: { id: orderId }, data: { totalKurus } }),
-    db.orderEdit.create({
-      data: {
-        orderId,
-        staffId: staff.id,
-        staffName: staff.name,
-        changesJson: JSON.stringify(changes),
-        afterPrint,
-      },
-    }),
-  ]);
+  try {
+    await db.$transaction(async (tx) => {
+      for (const e of edits) {
+        // Conditional on the quantity this edit was computed from. A zero
+        // count means someone else changed the line first.
+        const { count } = await tx.orderItem.updateMany({
+          where: { id: e.id, qty: e.fromQty, voidedAt: null },
+          data: e.toQty === 0 ? { qty: 0, voidedAt: now } : { qty: e.toQty },
+        });
+        if (count === 0) throw new EditConflict();
+      }
+      // And on the order still being editable: the desk may have served or
+      // rejected it while this dialog was open.
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: { in: [...EDITABLE_STATUSES] } },
+        data: { totalKurus },
+      });
+      if (count === 0) throw new EditConflict();
+      await tx.orderEdit.create({
+        data: {
+          orderId,
+          staffId: staff.id,
+          staffName: staff.name,
+          changesJson: JSON.stringify(changes),
+          afterPrint,
+        },
+      });
+    });
+  } catch (err) {
+    if (err instanceof EditConflict) return { ok: false, error: "conflict" };
+    throw err;
+  }
 
   publish({
     type: "order.updated",

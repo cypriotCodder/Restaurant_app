@@ -13,6 +13,12 @@ import { baseUrl } from "@/lib/env";
 // hard-gated to non-production builds.
 const SHOW_DEV_SCAN_LINKS = process.env.NODE_ENV !== "production";
 
+// Rendered per request: the venue name comes from the database, which the
+// build machine does not have, and the nonce-based CSP (src/proxy.ts) needs
+// every page to be dynamic. Every other page reads cookies and is dynamic
+// on its own.
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const venue = await db.venue.findFirst({ select: { name: true } });
   // The qrSecret and table codes are only ever read in development, so they

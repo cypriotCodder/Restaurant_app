@@ -23,6 +23,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const result = await editOrder(id, staff.venueId, { id: staff.sub, name: staff.name }, parsed.data);
   if (!result.ok) {
+    // 409 covers both "no longer editable" and "someone else edited it first";
+    // the desk reloads the ticket in either case.
     const status = result.error === "not_found" ? 404 : 409;
     return NextResponse.json({ error: result.error, status: result.status }, { status });
   }

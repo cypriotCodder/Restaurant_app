@@ -13,10 +13,12 @@ export const metadata: Metadata = {
   description: "QR ile masadan sipariş — scan, order, done.",
 };
 
+// No maximumScale: the customer page is read on phones, often in dim light, and
+// pinch-to-zoom must work (WCAG 1.4.4). Double-tap zoom on buttons is handled
+// with touch-action in the stylesheet instead.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({

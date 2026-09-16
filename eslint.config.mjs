@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Nested worktree checkouts carry their own node_modules and .next; linting
+    // them from the root produced tens of thousands of phantom errors.
+    ".claude/**",
   ]),
 ]);
 

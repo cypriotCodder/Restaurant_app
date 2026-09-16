@@ -81,8 +81,14 @@ export default function OrdersTab() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="wordmark text-2xl">Sipariş Geçmişi / Order History</h2>
         <div className="flex gap-2">
-          <a href="/api/admin/orders/export?days=7" className="btn btn-secondary text-xs">CSV (7 gün)</a>
-          <a href="/api/admin/orders/export?days=30" className="btn btn-secondary text-xs">CSV (30 gün)</a>
+          {/* The same window as the list below, so what the manager sees is
+              what they download. */}
+          <a href={`/api/admin/orders/export?days=${days}`} className="btn btn-secondary text-xs">
+            CSV (son {days} gün)
+          </a>
+          {days !== 30 && (
+            <a href="/api/admin/orders/export?days=30" className="btn btn-secondary text-xs">CSV (30 gün)</a>
+          )}
         </div>
       </div>
 

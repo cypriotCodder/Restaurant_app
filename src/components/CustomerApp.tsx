@@ -7,12 +7,13 @@ import { formatKurus } from "@/lib/money";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
 import { CurrencyProvider } from "./MoneyContext";
+import { ConfirmDialog } from "./Dialog";
 import BillPanel from "./customer/BillPanel";
 import CartBar from "./customer/CartBar";
 import Header from "./customer/Header";
 import MenuSection from "./customer/MenuSection";
 import OrdersList from "./customer/OrdersList";
-import { ExpiredScreen, LoadingScreen, SettledScreen } from "./customer/StateScreens";
+import { ErrorScreen, ExpiredScreen, LoadingScreen, SettledScreen } from "./customer/StateScreens";
 import { newIdempotencyKey } from "./customer/shared";
 import type { CartLine, CustomerBill, CustomerOrder, Item, Menu } from "./customer/types";
 
@@ -50,7 +51,11 @@ export default function CustomerApp({ code }: { code: string }) {
   }, []);
   const options = { ...swrDefaults, onError: onAuthError };
 
-  const { data: menu, mutate: loadMenu } = useSWR<Menu>(`/api/menu/${code}`, options);
+  const {
+    data: menu,
+    error: menuError,
+    mutate: loadMenu,
+  } = useSWR<Menu>(`/api/menu/${code}`, options);
   const { data: ordersData, mutate: loadOrders } = useSWR<{ orders: CustomerOrder[] }>(
     "/api/orders",
     options
@@ -103,16 +108,20 @@ export default function CustomerApp({ code }: { code: string }) {
         if (msg.type === "bill.updated") loadBill();
         // Staff closed the table at the till.
         if (msg.type === "visit.closed") setSettled(true);
+        // Staff ended this phone's session from the admin screen: show the
+        // re-scan wall now rather than on the next failed request.
+        if (msg.type === "session.revoked") setExpired(true);
       } catch {}
     };
     return () => es.close();
   }, [loadMenu, loadOrders, loadBill]);
 
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
 
   async function cancelOrder(orderId: string) {
     if (cancelling) return;
-    if (!confirm(t(locale, "confirmCancelOrder"))) return;
+    setConfirmCancel(null);
     setCancelling(orderId);
     const res = await fetch(`/api/orders/${orderId}/cancel`, { method: "POST" }).catch(() => null);
     setCancelling(null);
@@ -212,7 +221,7 @@ export default function CustomerApp({ code }: { code: string }) {
       setToast(t(locale, "rateLimited"));
       setTimeout(() => setToast(""), 5000);
     } else if (res.status === 409) {
-      setToast(locale === "en" ? "An item just sold out — please review your cart." : "Bir ürün tükendi — lütfen sepetinizi kontrol edin.");
+      setToast(t(locale, "itemSoldOut"));
       loadMenu();
       setTimeout(() => setToast(""), 5000);
     } else {
@@ -225,7 +234,10 @@ export default function CustomerApp({ code }: { code: string }) {
 
   if (settled) return <SettledScreen locale={locale} />;
   if (expired) return <ExpiredScreen locale={locale} />;
-  if (!menu) return <LoadingScreen />;
+  // A failed menu fetch that is not a dead session (401 is handled above) must
+  // say so: the bare loading dot is indistinguishable from a broken QR code.
+  if (!menu && menuError) return <ErrorScreen locale={locale} onRetry={() => void loadMenu()} />;
+  if (!menu) return <LoadingScreen locale={locale} />;
 
   return (
     <CurrencyProvider currency={menu.venue.currency}>
@@ -257,8 +269,19 @@ export default function CustomerApp({ code }: { code: string }) {
             orders={orders}
             locale={locale}
             money={money}
-            cancelOrder={cancelOrder}
+            cancelOrder={setConfirmCancel}
             cancelling={cancelling}
+          />
+        )}
+
+        {confirmCancel && (
+          <ConfirmDialog
+            title={t(locale, "confirmCancelOrder")}
+            confirmLabel={t(locale, "cancelOrder")}
+            cancelLabel={t(locale, "close")}
+            danger
+            onConfirm={() => cancelOrder(confirmCancel)}
+            onCancel={() => setConfirmCancel(null)}
           />
         )}
 

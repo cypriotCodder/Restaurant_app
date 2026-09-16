@@ -11,20 +11,24 @@ const itemUpdate = vi.fn();
 const editCreate = vi.fn();
 const publish = vi.fn();
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  // Writes go through an interactive transaction; the tx client is the same
+  // set of mocks, so assertions read the same spies either way.
+  const client = {
     order: {
       findFirst: (...a: unknown[]) => orderFindFirst(...a),
-      update: (...a: unknown[]) => orderUpdate(...a),
+      updateMany: (...a: unknown[]) => orderUpdate(...a),
     },
-    orderItem: { update: (...a: unknown[]) => itemUpdate(...a) },
+    orderItem: { updateMany: (...a: unknown[]) => itemUpdate(...a) },
     orderEdit: {
       create: (...a: unknown[]) => editCreate(...a),
       findMany: vi.fn(),
     },
-    $transaction: async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[]),
-  },
-}));
+    $transaction: async (arg: unknown) =>
+      typeof arg === "function" ? arg(client) : Promise.all(arg as Promise<unknown>[]),
+  };
+  return { db: client };
+});
 vi.mock("@/lib/bus", () => ({ publish: (...a: unknown[]) => publish(...a) }));
 
 const { editOrder } = await import("@/lib/orderEdit");
@@ -59,9 +63,35 @@ const edit = (lines: { itemId: string; qty: number }[], o = order()) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  orderUpdate.mockResolvedValue({});
-  itemUpdate.mockResolvedValue({});
+  orderUpdate.mockResolvedValue({ count: 1 });
+  itemUpdate.mockResolvedValue({ count: 1 });
   editCreate.mockResolvedValue({});
+});
+
+describe("two staff editing the same ticket", () => {
+  it("writes each line conditionally on the quantity the edit was computed from", async () => {
+    await edit([{ itemId: "li_1", qty: 1 }]);
+    expect(itemUpdate.mock.calls[0][0].where).toEqual({ id: "li_1", qty: 2, voidedAt: null });
+    // And the total only lands while the order is still editable.
+    expect(orderUpdate.mock.calls[0][0].where.status.in).toEqual(
+      expect.arrayContaining(["received", "accepted", "preparing", "ready"])
+    );
+  });
+
+  it("refuses the second edit as a conflict rather than applying stale arithmetic", async () => {
+    // Someone else already took the coffee from 2 to 1; our edit computed
+    // against 2 matches nothing.
+    itemUpdate.mockResolvedValue({ count: 0 });
+    const result = await edit([{ itemId: "li_1", qty: 1 }]);
+    expect(result).toEqual({ ok: false, error: "conflict" });
+    expect(editCreate).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the order left the kitchen while the dialog was open", async () => {
+    orderUpdate.mockResolvedValue({ count: 0 });
+    expect(await edit([{ itemId: "li_1", qty: 1 }])).toEqual({ ok: false, error: "conflict" });
+  });
 });
 
 describe("re-pricing", () => {
