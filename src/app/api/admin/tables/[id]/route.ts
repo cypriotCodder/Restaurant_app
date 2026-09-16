@@ -44,8 +44,13 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     await db.table.update({ where: { id }, data: { active: false } });
     return NextResponse.json({ ok: true, deactivated: true });
   }
+  // Every scan opens a TableVisit that references the table (RESTRICT), so a
+  // table that was scanned but never ordered from still has rows pointing at
+  // it. No orders means no visit here has anything worth keeping, so they go
+  // with the table. Sessions first: they reference visits.
   await db.$transaction([
     db.tableSession.deleteMany({ where: { tableId: id } }),
+    db.tableVisit.deleteMany({ where: { tableId: id } }),
     db.table.delete({ where: { id } }),
   ]);
   return NextResponse.json({ ok: true });
