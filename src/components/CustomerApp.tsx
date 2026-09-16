@@ -23,10 +23,20 @@ import type { CartLine, CustomerBill, CustomerOrder, Item, Menu } from "./custom
 const ItemSheet = dynamic(() => import("./customer/ItemSheet"));
 const CartSheet = dynamic(() => import("./customer/CartSheet"));
 
-export default function CustomerApp({ code }: { code: string }) {
+export default function CustomerApp({ code, initialMenu }: { code: string; initialMenu: Menu }) {
   const [locale, setLocale] = useState<Locale>("tr");
   const [expired, setExpired] = useState(false);
-  const [tab, setTab] = useState<"menu" | "orders" | "bill">("menu");
+  const [tab, setTabState] = useState<"menu" | "orders" | "bill">("menu");
+  // Orders and the bill are only fetched once the customer has a reason to
+  // look at them; a phone that just scanned used to make both requests
+  // (and their session lookups) for tabs it had not opened.
+  const [wantOrders, setWantOrders] = useState(false);
+  const [wantBill, setWantBill] = useState(false);
+  const setTab = useCallback((next: "menu" | "orders" | "bill") => {
+    setTabState(next);
+    if (next === "orders") setWantOrders(true);
+    if (next === "bill") setWantBill(true);
+  }, []);
   const [requestingBill, setRequestingBill] = useState(false);
   // Set when staff settle the table: the party has paid and their phones are
   // revoked, so the app shows a thank-you rather than a scary "session expired".
@@ -51,16 +61,18 @@ export default function CustomerApp({ code }: { code: string }) {
   }, []);
   const options = { ...swrDefaults, onError: onAuthError };
 
+  // The server rendered the menu into the page; SWR starts from it and only
+  // goes back to the network on menu.changed or focus.
   const {
     data: menu,
     error: menuError,
     mutate: loadMenu,
-  } = useSWR<Menu>(`/api/menu/${code}`, options);
+  } = useSWR<Menu>(`/api/menu/${code}`, { ...options, fallbackData: initialMenu });
   const { data: ordersData, mutate: loadOrders } = useSWR<{ orders: CustomerOrder[] }>(
-    "/api/orders",
+    wantOrders ? "/api/orders" : null,
     options
   );
-  const { data: bill, mutate: loadBill } = useSWR<CustomerBill>("/api/bill", options);
+  const { data: bill, mutate: loadBill } = useSWR<CustomerBill>(wantBill ? "/api/bill" : null, options);
   const orders = ordersData?.orders ?? [];
 
   // Seeded from the menu payload, then owned by the customer: the language

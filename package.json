@@ -15,7 +15,7 @@
     "seed": "node --env-file-if-exists=.env.local prisma/seed.mjs",
     "photos:reprocess": "node --env-file-if-exists=.env.local scripts/reprocess-photos.mjs",
     "package": "next build && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && cp -r bridge .next/standalone/bridge && cp -r prisma .next/standalone/prisma && node scripts/stamp-version.mjs && rm -f .next/standalone/.env",
-    "package:venue": "npm run package && node scripts/prune-engines.mjs --keep windows",
+    "package:venue": "npm run package && node scripts/prune-engines.mjs --keep windows && node scripts/bundle-sharp.mjs --target win32-x64",
     "dev:origin": "node --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/dev-origin.mjs"
   },
   "overrides": {

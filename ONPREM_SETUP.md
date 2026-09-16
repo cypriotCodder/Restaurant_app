@@ -62,9 +62,13 @@ offline in between. Terminate TLS in nginx or Caddy in front of the app:
 
 ```
 pos.theheaven.app {
+    encode zstd gzip
     reverse_proxy 127.0.0.1:3000
 }
 ```
+
+`encode` lets Caddy compress responses Node has not already compressed and
+offers zstd, which phones' browsers accept and Node's built-in gzip does not.
 
 Caddy handles renewal itself if the PC can reach the internet at renewal time.
 
@@ -159,12 +163,23 @@ The bridge copy is what makes the `/opt/masadan/bridge/agent.mjs` path in
 section 6 exist. The agent talks to the server over HTTP like any other client,
 so nothing in the app imports it and nothing else would put it there.
 
+For the Windows venue build use `npm run package:venue` instead: it also
+strips the Prisma engines the target cannot load and swaps in the Windows
+native `sharp` binding (`scripts/bundle-sharp.mjs`). Without that step sharp
+falls back to its WebAssembly build on the venue PC and every menu photo
+resize runs several times slower.
+
 Copy `.next/standalone` to `/opt/masadan` on the PC, then apply migrations:
 
 ```bash
 cd /opt/masadan
 DATABASE_URL="postgresql://..." npx prisma migrate deploy
 ```
+
+Menu photos uploaded before September 2026 were stored at their original size.
+Run `npm run photos:reprocess` once (with `UPLOAD_DIR` and `DATABASE_URL` set)
+to shrink them to the ≤1200px WebP that uploads now produce; it is safe to
+repeat and skips files already in that shape.
 
 ## 5. Run it as a service
 
