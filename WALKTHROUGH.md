@@ -132,24 +132,41 @@ Everything below is PowerShell **as Administrator** unless stated otherwise.
 ### 4. Install the runtimes
 
 - **Node.js 24 LTS** — the MSI from nodejs.org. Tick "Add to PATH".
-- **PostgreSQL 16+** — the EDB installer. Set a password for `postgres` and
-  write it down. Leave the port at 5432.
+- **Docker Desktop** — Download and install from docker.com. Ensure it is running.
 
-Confirm:
+Confirm Node:
 
 ```powershell
 node --version     # v24.x
-psql --version     # 16.x or higher
 ```
 
-If `psql` is not found, add `C:\Program Files\PostgreSQL\16\bin` to PATH and
-open a new terminal.
+### 5. Start the database (via Docker)
 
-### 5. Create the database
+Since native PostgreSQL was problematic, we use Docker. Create a file named `docker-compose.yml` in `C:\masadan` with these contents:
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: masadan
+      POSTGRES_PASSWORD: choose-a-password
+      POSTGRES_DB: masadan
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+```
+
+Then start the database:
 
 ```powershell
-psql -U postgres -c "CREATE USER masadan WITH PASSWORD 'choose-a-password';"
-psql -U postgres -c "CREATE DATABASE masadan OWNER masadan;"
+cd C:\masadan
+docker compose up -d
 ```
 
 ### 6. Copy the bundle
