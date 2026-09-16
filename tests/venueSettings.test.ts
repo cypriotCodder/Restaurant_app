@@ -36,6 +36,7 @@ const {
   deleteBridgeKey,
   POS_ADAPTERS,
 } = await import("@/lib/venueSettings");
+const { hashBridgeKey } = await import("@/lib/bridgeKey");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -115,20 +116,24 @@ describe("rotateQrSecret", () => {
 describe("bridge keys", () => {
   it("never returns a usable key when listing", async () => {
     bridgeFindMany.mockResolvedValue([
-      { id: "k1", key: "bridge-0123456789abcdef", label: "mutfak", createdAt: new Date() },
+      { id: "k1", hint: "abcdef", label: "mutfak", createdAt: new Date() },
     ]);
     const [view] = await listBridgeKeys("venue_1");
     expect(view.hint).toBe("…abcdef");
-    // A stolen admin session must not be able to read a key it could then use
-    // to drain the outbox from outside the building.
-    expect(JSON.stringify(view)).not.toContain("bridge-0123456789abcdef");
+    // The query itself must not even select a secret column.
+    expect(bridgeFindMany.mock.calls[0][0].select).not.toHaveProperty("keyHash");
   });
 
-  it("issues a key with the bridge- prefix the agent expects", async () => {
+  it("issues a key with the bridge- prefix the agent expects, storing only its hash", async () => {
     bridgeCreate.mockResolvedValue({ id: "k1" });
     const created = await createBridgeKey("venue_1", "mutfak-pi");
     expect(created.key).toMatch(/^bridge-[0-9a-f]{32}$/);
-    expect(bridgeCreate.mock.calls[0][0].data.label).toBe("mutfak-pi");
+    const data = bridgeCreate.mock.calls[0][0].data;
+    expect(data.label).toBe("mutfak-pi");
+    expect(data.keyHash).toBe(hashBridgeKey(created.key));
+    expect(data.hint).toBe(created.key.slice(-6));
+    // A database dump must not contain the plaintext.
+    expect(JSON.stringify(data)).not.toContain(created.key);
   });
 
   it("falls back to a default label rather than an empty one", async () => {

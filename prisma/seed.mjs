@@ -1,9 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 
 const db = new PrismaClient();
 const code = () => randomBytes(6).toString("base64url");
+// Mirrors src/lib/bridgeKey.ts: only the hash is stored, the plaintext is
+// printed once below.
+const bridgeKey = "bridge-" + randomBytes(16).toString("hex");
+const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
 // Staff credentials come from the environment so a real deployment is never
 // seeded with a password published in the README. Anything unset gets a fresh
@@ -43,7 +47,7 @@ async function main() {
         create: Array.from({ length: 8 }, (_, i) => ({ name: `Masa ${i + 1}`, code: code() })),
       },
       bridgeKeys: {
-        create: { key: "bridge-" + randomBytes(16).toString("hex"), label: "kitchen-bridge" },
+        create: { keyHash: sha256(bridgeKey), hint: bridgeKey.slice(-6), label: "kitchen-bridge" },
       },
     },
   });
@@ -125,11 +129,10 @@ async function main() {
     });
   }
 
-  const bridgeKey = await db.bridgeKey.findFirst({ where: { venueId: venue.id } });
   console.log(`Seeded ${venue.name}.`);
   console.log("  admin:", adminEmail);
   console.log("  desk: ", deskEmail);
-  console.log("  bridge key:", bridgeKey.key);
+  console.log("  bridge key:", bridgeKey, "(shown once — only its hash is stored)");
   if (generated.length) {
     console.log("\n  Generated passwords — copy these now, they are not stored anywhere:");
     for (const [envVar, secret] of generated) {

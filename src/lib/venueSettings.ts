@@ -2,6 +2,7 @@ import { z } from "zod";
 import { randomBytes } from "crypto";
 import { db } from "./db";
 import { publish } from "./bus";
+import { bridgeKeyHint, hashBridgeKey, newBridgeKey } from "./bridgeKey";
 
 // Venue-level configuration that previously existed only as database columns:
 // changing the venue name or switching the POS adapter meant a SQL statement.
@@ -72,27 +73,33 @@ export async function listBridgeKeys(venueId: string): Promise<BridgeKeyView[]> 
   const keys = await db.bridgeKey.findMany({
     where: { venueId },
     orderBy: { createdAt: "asc" },
+    select: { id: true, label: true, hint: true, createdAt: true },
   });
   return keys.map((k) => ({
     id: k.id,
     label: k.label,
-    hint: `…${k.key.slice(-6)}`,
+    hint: `…${k.hint}`,
     createdAt: k.createdAt,
   }));
 }
 
 /**
- * Issues a bridge key. The plaintext is returned **once** — it is stored so the
- * agent can authenticate, but never shown again through the API, so a stolen
- * admin session cannot read the key for a printer it has no other access to.
+ * Issues a bridge key. The plaintext is returned **once**: only its hash is
+ * stored, so neither a stolen admin session nor a database dump can recover
+ * the credential for a printer it has no other access to.
  */
 export async function createBridgeKey(
   venueId: string,
   label: string
 ): Promise<{ id: string; key: string }> {
-  const key = "bridge-" + randomBytes(16).toString("hex");
+  const key = newBridgeKey();
   const row = await db.bridgeKey.create({
-    data: { venueId, key, label: label.trim() || "kitchen-bridge" },
+    data: {
+      venueId,
+      keyHash: hashBridgeKey(key),
+      hint: bridgeKeyHint(key),
+      label: label.trim() || "kitchen-bridge",
+    },
     select: { id: true },
   });
   return { id: row.id, key };

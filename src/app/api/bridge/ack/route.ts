@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { MAX_ATTEMPTS } from "@/lib/pos/outbox";
+import { venueForBridgeKey } from "@/lib/bridgeKey";
 
 export async function POST(req: NextRequest) {
-  const key = req.headers.get("x-bridge-key");
-  const row = key ? await db.bridgeKey.findUnique({ where: { key } }) : null;
-  if (!row) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const venueId = await venueForBridgeKey(req.headers.get("x-bridge-key"));
+  if (!venueId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { deliveryId, ok, error } = await req.json().catch(() => ({}));
   const delivery = await db.posDelivery.findFirst({
-    where: { id: String(deliveryId), venueId: row.venueId },
+    where: { id: String(deliveryId), venueId },
   });
   if (!delivery) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
