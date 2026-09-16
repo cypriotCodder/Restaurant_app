@@ -48,5 +48,7 @@ prisma/*.db
 *.tsbuildinfo
 next-env.d.ts
 
-# claude code local settings
+# claude code local settings and nested worktree checkouts. The worktrees were
+# once committed as submodule pointers by accident; they are local scratch.
 .claude/settings.local.json
+.claude/worktrees/
