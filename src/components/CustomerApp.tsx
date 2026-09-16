@@ -73,6 +73,15 @@ export default function CustomerApp({ code }: { code: string }) {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [menu]);
 
+  // The sheets are split out of the first paint, which is right — but the
+  // first tap on a dish then paid for the chunk download. Warm them once the
+  // menu is on screen and the network is otherwise idle.
+  useEffect(() => {
+    if (!menu) return;
+    void import("./customer/ItemSheet");
+    void import("./customer/CartSheet");
+  }, [menu]);
+
   // Restore the cart that survived a re-scan. This has to stay a synchronous
   // post-mount effect: localStorage does not exist during SSR, so hydrating it
   // in a useState initializer would make the server and client first renders

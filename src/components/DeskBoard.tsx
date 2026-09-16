@@ -214,14 +214,23 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
   }
 
   async function transition(id: string, status: string, rejectReason?: string) {
+    // Optimistic: the card changes the instant the button is pressed. Staff
+    // press these hundreds of times a shift, and waiting on the PATCH plus a
+    // full reload before anything moved made the board feel sluggish. The
+    // reload afterwards reconciles with what the server actually did.
+    setOrders((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, status, rejectReason: rejectReason ?? null } : o))
+    );
     const res = await fetch(`/api/desk/orders/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, rejectReason }),
     }).catch(() => null);
     // A 409 means the order moved under us (another screen, or the customer
-    // cancelled); reloading shows what actually happened.
-    if (res) load();
+    // cancelled); reloading shows what actually happened — and undoes the
+    // optimistic change if it was wrong.
+    void load();
+    if (!res) setLoadError(true);
   }
 
   const active = orders.filter((o) => !DONE.includes(o.status));
