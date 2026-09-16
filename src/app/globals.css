@@ -33,6 +33,18 @@ body {
   color: var(--color-text);
 }
 
+/* Pinch-zoom stays enabled for the page; buttons just skip the 300ms
+   double-tap-to-zoom delay so quantity steppers feel immediate. */
+button, a.btn, .seg-opt {
+  touch-action: manipulation;
+}
+
+/* Category anchors are reached from a sticky header; without this the heading
+   lands underneath it. Header height plus the tab row plus the category rail. */
+section[id^="cat-"] {
+  scroll-margin-top: 150px;
+}
+
 /* ── wordmark ── */
 .wordmark {
   font-family: var(--font-heading);

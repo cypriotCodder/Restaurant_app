@@ -12,7 +12,7 @@ import CartBar from "./customer/CartBar";
 import Header from "./customer/Header";
 import MenuSection from "./customer/MenuSection";
 import OrdersList from "./customer/OrdersList";
-import { ExpiredScreen, LoadingScreen, SettledScreen } from "./customer/StateScreens";
+import { ErrorScreen, ExpiredScreen, LoadingScreen, SettledScreen } from "./customer/StateScreens";
 import { newIdempotencyKey } from "./customer/shared";
 import type { CartLine, CustomerBill, CustomerOrder, Item, Menu } from "./customer/types";
 
@@ -50,7 +50,11 @@ export default function CustomerApp({ code }: { code: string }) {
   }, []);
   const options = { ...swrDefaults, onError: onAuthError };
 
-  const { data: menu, mutate: loadMenu } = useSWR<Menu>(`/api/menu/${code}`, options);
+  const {
+    data: menu,
+    error: menuError,
+    mutate: loadMenu,
+  } = useSWR<Menu>(`/api/menu/${code}`, options);
   const { data: ordersData, mutate: loadOrders } = useSWR<{ orders: CustomerOrder[] }>(
     "/api/orders",
     options
@@ -212,7 +216,7 @@ export default function CustomerApp({ code }: { code: string }) {
       setToast(t(locale, "rateLimited"));
       setTimeout(() => setToast(""), 5000);
     } else if (res.status === 409) {
-      setToast(locale === "en" ? "An item just sold out — please review your cart." : "Bir ürün tükendi — lütfen sepetinizi kontrol edin.");
+      setToast(t(locale, "itemSoldOut"));
       loadMenu();
       setTimeout(() => setToast(""), 5000);
     } else {
@@ -225,7 +229,10 @@ export default function CustomerApp({ code }: { code: string }) {
 
   if (settled) return <SettledScreen locale={locale} />;
   if (expired) return <ExpiredScreen locale={locale} />;
-  if (!menu) return <LoadingScreen />;
+  // A failed menu fetch that is not a dead session (401 is handled above) must
+  // say so: the bare loading dot is indistinguishable from a broken QR code.
+  if (!menu && menuError) return <ErrorScreen locale={locale} onRetry={() => void loadMenu()} />;
+  if (!menu) return <LoadingScreen locale={locale} />;
 
   return (
     <CurrencyProvider currency={menu.venue.currency}>

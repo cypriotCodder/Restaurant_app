@@ -23,7 +23,7 @@ export default function MenuSection({
           <h2 id={`h-${c.id}`} className="wordmark text-lg mb-3">{name(c, locale)}</h2>
           {c.items.filter(i => i.available).length === 0 ? (
             <div className="border border-dashed py-6 text-center text-sm" style={{ borderColor: "var(--color-divider)", color: "var(--color-neutral-900)" }}>
-              {locale === "en" ? "Nothing available right now." : "Bu kategoride şu anda ürün yok."}
+              {t(locale, "nothingAvailable")}
             </div>
           ) : (
             <div className="menu-grid">

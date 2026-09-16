@@ -74,13 +74,20 @@ const server = net.createServer((sock) => {
     const bytes = Buffer.concat(chunks);
     if (bytes.length === 0) {
       console.error("empty ticket ignored");
+      sock.end("ERR empty ticket\n");
       return;
     }
+
+    // The outcome goes back on the same socket. The agent (PRINTER_ACK=1)
+    // only acks the delivery as printed on "OK"; anything else re-queues it,
+    // so a jammed or unplugged printer shows up on the desk as a failed
+    // ticket instead of a green row and lost paper.
+    const reply = (line) => sock.end(line + "\n");
 
     if (DRY_RUN) {
       console.log(`[dry run] ${bytes.length} bytes, not printed`);
       console.log(bytes.subarray(0, 64).toString("hex").replace(/(..)/g, "$1 "));
-      return;
+      return reply("OK dry-run");
     }
 
     const file = path.join(tmpdir(), `ticket-${randomBytes(6).toString("hex")}.bin`);
@@ -88,10 +95,10 @@ const server = net.createServer((sock) => {
       await writeFile(file, bytes);
       await copyToPrinter(file);
       console.log(`printed ${bytes.length} bytes to ${PRINTER_SHARE}`);
+      reply("OK");
     } catch (err) {
-      // The agent has already acked this delivery as sent, so a failure here is
-      // only visible in this log. Loud on purpose.
       console.error(`PRINT FAILED (${bytes.length} bytes):`, err.message);
+      reply(`ERR ${err.message}`.replace(/\s+/g, " "));
     } finally {
       await unlink(file).catch(() => {});
     }

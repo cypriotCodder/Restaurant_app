@@ -1,6 +1,6 @@
 "use client";
 
-import type { Locale } from "@/lib/i18n";
+import { t, type Locale } from "@/lib/i18n";
 
 export default function CartBar({
   cartCount,
@@ -22,10 +22,10 @@ export default function CartBar({
       style={{ background: "var(--color-text)", color: "var(--color-bg)" }}
     >
       <span className="font-medium">
-        {cartCount} {cartCount === 1 ? "item" : "items"} · {money(cartTotal)}
+        {cartCount} {t(locale, "items")} · {money(cartTotal)}
       </span>
       <span className="font-bold flex items-center gap-1" style={{ color: "var(--color-accent-200)" }}>
-        {locale === "en" ? "View cart" : "Sepeti gör"} →
+        {t(locale, "viewCart")} →
       </span>
     </button>
   );
