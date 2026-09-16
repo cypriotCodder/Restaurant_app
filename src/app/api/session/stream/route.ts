@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const session = await getActiveSession();
   if (!session) return new Response("no_session", { status: 401 });
-  const { tableId, venueId } = session;
+  const { id: sessionId, tableId, venueId } = session;
 
   return sseResponse(
     // Filtering on tableId here — not inside serialize — is what keeps this
@@ -29,10 +29,14 @@ export async function GET() {
       ) {
         return e.tableId === tableId;
       }
+      // Staff ended THIS phone's session from the admin screen. Only this
+      // phone needs to hear it; the rest of the table carries on.
+      if (e.type === "session.revoked") return e.sessionId === sessionId;
       return e.type === "menu.changed";
     },
     async (e) => {
       if (e.type === "menu.changed") return { type: "menu.changed" };
+      if (e.type === "session.revoked") return { type: "session.revoked" };
       // The party's table was settled and their sessions revoked: the phone
       // should show the "thanks, re-scan to order again" state immediately
       // rather than discovering it on the next failed request.

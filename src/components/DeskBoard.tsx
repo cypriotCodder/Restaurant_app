@@ -155,9 +155,13 @@ export default function DeskBoard({ staffName, currency }: { staffName: string; 
     });
     if (!res.ok) {
       const b = await res.json().catch(() => ({}));
+      // The ticket on screen is stale in both cases; pull the current one so
+      // the next attempt is computed against what is actually there.
+      if (b.error === "conflict" || b.error === "not_editable") void load();
       return (
         {
           not_editable: "Bu sipariş artık düzenlenemez / No longer editable",
+          conflict: "Sipariş az önce değişti — yeniden açın / Order just changed elsewhere; reopen it",
           empties_order: "Tüm kalemler silinemez — siparişi reddedin / Cannot empty an order; reject it instead",
           no_change: "Değişiklik yok / Nothing changed",
           unknown_line: "Geçersiz kalem / Invalid line",

@@ -107,6 +107,9 @@ export default function CustomerApp({ code }: { code: string }) {
         if (msg.type === "bill.updated") loadBill();
         // Staff closed the table at the till.
         if (msg.type === "visit.closed") setSettled(true);
+        // Staff ended this phone's session from the admin screen: show the
+        // re-scan wall now rather than on the next failed request.
+        if (msg.type === "session.revoked") setExpired(true);
       } catch {}
     };
     return () => es.close();
