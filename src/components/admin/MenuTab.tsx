@@ -51,7 +51,30 @@ export default function MenuTab() {
   }
 
   async function toggleAvailable(item: AdminItem) {
-    await call(`/api/admin/items/${item.id}`, json("PATCH", { available: !item.available }), "Güncellenemedi / Could not update");
+    // The 86 switch flips immediately and rolls back if the PATCH fails; the
+    // revalidate afterwards keeps the cache honest.
+    const next = !item.available;
+    setError("");
+    await mutate(
+      async (current) => {
+        const res = await fetch(`/api/admin/items/${item.id}`, json("PATCH", { available: next })).catch(() => null);
+        if (!res?.ok) {
+          setError("Güncellenemedi / Could not update");
+          throw new Error("toggle failed");
+        }
+        return current;
+      },
+      {
+        optimisticData: (current) => ({
+          categories: (current?.categories ?? []).map((c) => ({
+            ...c,
+            items: c.items.map((i) => (i.id === item.id ? { ...i, available: next } : i)),
+          })),
+        }),
+        rollbackOnError: true,
+        revalidate: true,
+      }
+    ).catch(() => {});
   }
 
   // Flatten all items + apply search & category filter

@@ -14,16 +14,16 @@ export type StoredFile = { url: string };
 
 export interface StorageAdapter {
   readonly name: "disk";
-  /** `key` is a relative path like "menu/<venueId>/<random>.jpg". */
-  put(key: string, file: File, contentType: string): Promise<StoredFile>;
+  /** `key` is a relative path like "menu/<venueId>/<random>.webp". */
+  put(key: string, bytes: Buffer): Promise<StoredFile>;
 }
 
 const diskAdapter: StorageAdapter = {
   name: "disk",
-  async put(key, file) {
+  async put(key, bytes) {
     const target = resolveUploadPath(key);
     await mkdir(/* turbopackIgnore: true */ path.dirname(target), { recursive: true });
-    await writeFile(/* turbopackIgnore: true */ target, Buffer.from(await file.arrayBuffer()));
+    await writeFile(/* turbopackIgnore: true */ target, bytes);
     // A relative URL, so the stored value keeps working if the venue's
     // hostname or port ever changes.
     return { url: `/api/media/${key}` };

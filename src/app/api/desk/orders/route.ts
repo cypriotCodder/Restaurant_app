@@ -16,12 +16,28 @@ export async function GET(req: Request) {
         : { status: { in: ["received", "accepted", "preparing", "ready"] } }),
     },
     orderBy: { createdAt: "asc" },
-    include: {
-      items: { where: { voidedAt: null } },
-      table: true,
-      session: true,
-      deliveries: true,
-      edits: { orderBy: { createdAt: "asc" } },
+    // Selected, not included: `deliveries` carries the base64 ESC/POS payload
+    // of every ticket and `session` a row the board never reads. Together they
+    // were most of the bytes on a response that is refetched on every event.
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      rejectReason: true,
+      totalKurus: true,
+      createdAt: true,
+      tableId: true,
+      sessionId: true,
+      table: { select: { name: true } },
+      items: {
+        where: { voidedAt: null },
+        select: { id: true, nameSnapshot: true, qty: true, note: true, modifiersJson: true },
+      },
+      deliveries: { select: { status: true }, orderBy: { createdAt: "desc" }, take: 1 },
+      edits: {
+        orderBy: { createdAt: "asc" },
+        select: { staffName: true, afterPrint: true, changesJson: true },
+      },
     },
   });
 

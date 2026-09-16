@@ -66,11 +66,39 @@ export function ErrorScreen({ locale, onRetry }: { locale: Locale; onRetry: () =
   );
 }
 
+/**
+ * The shape of the menu page, before the menu arrives: a header, a category
+ * rail and two columns of cards. Layout lands once instead of jumping from a
+ * centred dot to a full grid, and the page reads as "loading a menu" rather
+ * than "stuck".
+ */
 export function LoadingScreen({ locale }: { locale: Locale }) {
+  const block = (cls: string) => (
+    <div className={`rounded-sm animate-pulse ${cls}`} style={{ background: "var(--color-neutral-200)" }} />
+  );
   return (
-    <main className="flex-1 flex flex-col items-center justify-center gap-3" aria-busy="true">
-      <div className="h-2 w-2 rounded-full animate-pulse" style={{ background: "var(--color-accent)" }} />
-      <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>{t(locale, "loading")}</p>
+    <main className="flex-1 flex flex-col max-w-lg w-full mx-auto" aria-busy="true" aria-label={t(locale, "loading")}>
+      <div className="px-4 py-3 border-b-2" style={{ borderColor: "var(--color-divider)" }}>
+        <div className="flex items-center justify-between">
+          {block("h-4 w-32")}
+          {block("h-6 w-20")}
+        </div>
+        <div className="flex gap-2 mt-3">{block("h-8 w-24")}{block("h-8 w-24")}{block("h-8 w-24")}</div>
+        <div className="flex gap-2 mt-3">{block("h-6 w-16")}{block("h-6 w-20")}{block("h-6 w-14")}</div>
+      </div>
+      <div className="px-4 pt-5">
+        {block("h-5 w-28 mb-3")}
+        <div className="menu-grid">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="menu-card" aria-hidden>
+              <div className="menu-card-img" />
+              <div className="menu-card-body gap-2">{block("h-3.5 w-3/4")}{block("h-3 w-1/2")}</div>
+              <div className="menu-card-footer">{block("h-4 w-12")}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="sr-only" role="status">{t(locale, "loading")}</p>
     </main>
   );
 }

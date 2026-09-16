@@ -80,6 +80,14 @@ first database query. Rebuild and copy it again.
 "@
 }
 
+# Not fatal: without the native binding sharp falls back to WebAssembly and
+# menu photos still resize, only slowly. Worth knowing before service, though.
+$sharpWin = Join-Path $BundlePath "node_modules\@img\sharp-win32-x64"
+if (-not (Test-Path $sharpWin)) {
+    Warn "bundle has no @img/sharp-win32-x64 - photo resizing will use the slow WebAssembly path."
+    Warn "Build with 'npm run package:venue' to include the native binding."
+}
+
 $newBuild = Get-Content (Join-Path $BundlePath "version.json") -Raw | ConvertFrom-Json
 $newLabel = "$($newBuild.version)$(if ($newBuild.commit) { "+$($newBuild.commit)" })"
 if ($newBuild.dirty) {

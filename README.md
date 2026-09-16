@@ -66,6 +66,16 @@ BASE_URL=https://your-app BRIDGE_KEY=<see seed output> PRINTER_HOST=192.168.1.50
 
 The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP only, and prints to the same network kitchen printer (port 9100) AKINSOFT prints to. Failed prints show a "YAZICI HATASI" badge on the desk — nothing is ever silently lost. Bridge keys are stored hashed; the plaintext is shown once when issued. Deeper AKINSOFT integration (Wolvox local import surface, or Entegra-style middleware) slots in as another adapter once the venue's exact module/license is confirmed.
 
+## Performance notes
+
+The customer menu is rendered on the server into the first HTML response and
+served from a per-venue in-memory copy that the `menu.changed` bus event
+drops, so a scan costs one database round-trip for the session and none for
+the menu. Session validation writes `lastSeenAt` at most once a minute.
+Uploaded photos are resized to ≤1200px WebP before they are stored
+(`npm run photos:reprocess` converts older ones). The Windows bundle carries
+the native `sharp` binding via `npm run package:venue`.
+
 ## Testing on a phone
 
 The dev server must be reachable at an address the phone can dial, and that

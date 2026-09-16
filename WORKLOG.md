@@ -14,6 +14,68 @@ Newest entry first. One entry per step of work.
 
 ---
 
+## 2026-09-16 — Performance plan
+
+**Asked for:** a performance audit (feel smoother, load faster), then an
+approved ten-item plan. Measured from the production build: the framework
+floor is ~170 KB gzipped of JavaScript on every page and the customer route
+adds 24 KB, so bytes were not the lever. Round-trips and server work were.
+
+### Load
+
+**The menu is rendered on the server.** `src/lib/menu.ts` builds the customer
+payload; `t/[code]/page.tsx` passes it to `CustomerApp` as SWR
+`fallbackData`. The phone no longer downloads the bundle, hydrates, and then
+asks for the menu — it is in the first HTML byte. The orders and bill
+requests are deferred until their tab is opened.
+
+**One menu per venue, in memory.** `venueMenu()` caches the promise and the
+`menu.changed` bus event drops it, so a burst of scans after an edit shares
+one load and every other scan costs no menu queries at all.
+
+**Session touch throttled.** `getActiveSession` writes `lastSeenAt` only when
+the stamp is over a minute old. A first page load did four UPDATEs; now one.
+
+**Uploads resized.** `src/lib/photos.ts` caps photos at 1200px on the long
+side and re-encodes as WebP at upload; `scripts/reprocess-photos.mjs`
+converts existing files and repoints the items. `sharp` is a direct
+dependency now rather than something reached through Next.
+
+**Native sharp for Windows.** The bundle built on macOS shipped only the
+macOS binding and the WebAssembly fallback, which sharp's loader picks on
+Windows. `scripts/bundle-sharp.mjs` fetches `@img/sharp-win32-x64` with
+`npm pack` (never `npm install`, which would prune the traced node_modules)
+and removes the platforms the target cannot use; `npm run package:venue`
+runs it, and `update.ps1` warns when a bundle lacks it.
+
+**Smaller things.** Six indexes on joins and range scans Prisma does not
+create (`OrderItem.orderId` above all). The desk orders response no longer
+carries every ticket's base64 ESC/POS payload; the desk bills list is one
+query instead of one per open table. The 25 KB ICO favicon is a 190-byte SVG.
+Caddy gets `encode zstd gzip`.
+
+### Feel
+
+Desk status buttons and the admin 86 switch update on screen before the
+request returns and reconcile afterwards. The customer page shows a
+menu-shaped skeleton instead of a dot and prefetches the item and cart
+sheets once the menu is up, so the first tap on a dish does not wait for a
+chunk.
+
+### Not done, by design
+
+Three items from the plan need runtime data first: memoising `OrderCard`
+(profile the till during a busy service), replacing the header's
+`backdrop-blur` (test on the oldest phone staff own), and an order retention
+policy (decide a horizon). The indexes make the third safe to defer.
+
+### Tests
+
+299 → 313. New: menu cache (dedupe, invalidation, failure), photo
+processing on real sharp, desk bills single query, session touch throttle.
+
+---
+
 ## 2026-09-16 — Audit fixes: reliability, security, accessibility
 
 **Asked for:** a read-only audit of the whole codebase, then an approved
