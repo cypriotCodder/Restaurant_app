@@ -116,7 +116,7 @@ describe("mintSession", () => {
 
 describe("getActiveSession", () => {
   it("returns the session for a valid cookie and slides the idle window", async () => {
-    findUnique.mockResolvedValue(sessionRow());
+    findUnique.mockResolvedValue(sessionRow({ lastSeenAt: new Date(Date.now() - 2 * MIN) }));
     const result = await getActiveSession();
     expect(result).toMatchObject({
       id: "sess_1",
@@ -127,6 +127,14 @@ describe("getActiveSession", () => {
     });
     // lastSeenAt is refreshed so an active table does not time out mid-meal.
     expect(update.mock.calls[0][0].data.lastSeenAt).toBeInstanceOf(Date);
+  });
+
+  it("does not write when the session was seen within the last minute", async () => {
+    // The first page load validates the session four times in a row; only
+    // the first of those should cost an UPDATE.
+    findUnique.mockResolvedValue(sessionRow({ lastSeenAt: new Date(Date.now() - 20_000) }));
+    expect(await getActiveSession()).not.toBeNull();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("returns null when no cookie is present", async () => {

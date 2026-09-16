@@ -12,6 +12,14 @@ export const SESSION_COOKIE = "table_session";
 const HARD_CAP_MS = 2 * 60 * 60 * 1000;
 const IDLE_MS = 30 * 60 * 1000;
 const MAX_ACTIVE_PER_TABLE = 6; // a table of friends may each scan
+/**
+ * How stale `lastSeenAt` may be before a request refreshes it. Every customer
+ * API call validates the session, and writing on every one of them meant four
+ * UPDATEs on the first page load and three more each time the phone woke. The
+ * idle window is 30 minutes, so a stamp that is up to a minute behind changes
+ * nothing about when a session expires.
+ */
+export const TOUCH_INTERVAL_MS = 60 * 1000;
 
 export type ActiveSession = {
   id: string;
@@ -69,10 +77,15 @@ export async function getActiveSession(expectedTableCode?: string): Promise<Acti
   if (session.lastSeenAt.getTime() + IDLE_MS < now) return null;
   if (expectedTableCode && session.table.code !== expectedTableCode) return null;
   if (!session.table.active) return null;
-  await db.tableSession.update({
-    where: { id: session.id },
-    data: { lastSeenAt: new Date() },
-  });
+  // The write is the expensive part of validation; skip it while the stamp
+  // is fresh. The sliding window still slides — once a minute instead of on
+  // every request.
+  if (session.lastSeenAt.getTime() + TOUCH_INTERVAL_MS <= now) {
+    await db.tableSession.update({
+      where: { id: session.id },
+      data: { lastSeenAt: new Date() },
+    });
+  }
   return {
     id: session.id,
     venueId: session.venueId,
