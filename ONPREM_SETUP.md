@@ -225,7 +225,9 @@ Restart=always
 ```
 
 `BASE_URL` stays on loopback: the agent has no reason to leave the machine.
-Verify with `DRY_RUN=1` before pointing at the printer.
+Verify with `DRY_RUN=1` before pointing at the printer. Leave `PRINTER_ACK`
+unset here: a network printer accepts bytes and says nothing. It is only for
+the Windows USB shim (WALKTHROUGH.md), which does answer.
 
 ## 7. Backups
 

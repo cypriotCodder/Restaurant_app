@@ -14,6 +14,119 @@ Newest entry first. One entry per step of work.
 
 ---
 
+## 2026-09-16 — Audit fixes: reliability, security, accessibility
+
+**Asked for:** a read-only audit of the whole codebase, then an approved
+21-item plan implemented in priority order. Every item shipped except the
+parts that need the venue's hardware or the owner's hands (below).
+
+### Critical
+
+**SSE heartbeat could crash the server** (`src/lib/sse.ts`). The 25s ping ran
+in a timer with an unguarded `controller.enqueue`; a phone that vanished
+before `cancel()` fired would throw an uncaught exception in the one Node
+process serving the venue. Every write is now guarded and the first failure
+tears the stream down. Pinned by `tests/sse.test.ts`.
+
+**Deleting a scanned table returned 500.** Every scan opens a `TableVisit`
+with a RESTRICT foreign key to the table. Visits now go in the same
+transaction, sessions first.
+
+**USB print path acked before printing.** The agent reported "sent" once the
+TCP write to the shim completed; the shim's own failure was only in its log.
+`bridge/win-usb-print.mjs` now answers `OK` or `ERR <reason>` on the socket,
+and `bridge/agent.mjs` with `PRINTER_ACK=1` acks the delivery only on `OK`.
+A jammed printer is now a failed ticket on the desk. Opt-in because a real
+network printer never replies. Agent ticks no longer overlap. Verified
+end-to-end against the real shim in `tests/bridgeAgentProtocol.test.ts`.
+
+**Customer loading dead-end.** A failed menu fetch fell through to the
+loading dot forever, which on a phone is indistinguishable from a broken QR
+code (the very symptom the 2026-09-14 entry chased). Non-401 errors now show
+a message and a retry button.
+
+### Security
+
+**Client IP attribution.** `X-Forwarded-For` is client-controlled unless a
+proxy we run appends the real hop, and Next only fills it when absent. With
+the new `TRUST_PROXY=1` the limiter reads the last hop; otherwise the first.
+Because per-IP limits are therefore advisory on a directly exposed server,
+the two unauthenticated write paths — failed scans and sessionless order
+posts — now also carry a venue-wide cap (`writeBudget`) that no forged
+address can evade. Sessionless order posts had no cap at all before.
+
+**Bridge keys hashed** (migration `20260916000000_bridge_key_hash`). Only a
+SHA-256 is stored, with the last six characters as a display hint. Existing
+keys are hashed in place so configured agents keep working. Unsalted on
+purpose: the key is 128 random bits and is presented on every 3s poll.
+
+**Prisma advisory.** `deepmerge-ts` (reached via the Prisma CLI's config
+package) is pinned past GHSA-ggr8-5vv4-36mx with an npm override; `prisma
+validate` and `generate` confirmed working. No 6.x release carries the fix.
+
+**Nonce-based CSP.** `src/proxy.ts` mints a per-request nonce and sets
+`script-src 'self' 'nonce-…' 'strict-dynamic'` on every rendered page, so no
+inline script runs without it. The static policy in `next.config.ts` now
+covers only `/api` and `/_next`, which the proxy skips, because two CSP
+headers on one response are intersected. `style-src` keeps `'unsafe-inline'`:
+Tailwind and the tokens are style *attributes*, which a nonce cannot cover.
+
+**CSV export** neutralises leading `= + - @` in cells (customer notes land in
+Excel on the owner's PC) and caps the range at a year like the log.
+
+### Correctness
+
+**Order edits are conditional.** Each line writes only if its quantity is
+still what the edit was computed from, and the total only if the order is
+still editable; the loser of two simultaneous edits gets `conflict` (409)
+and the desk reloads the ticket.
+
+**Settlement is one transaction** with a conditional close, and marks paid
+exactly the orders the bill covered. An order arriving mid-settle stays
+unpaid and visible rather than being silently marked paid.
+
+**Session revocation reaches the phone** over its stream; before, the phone
+found out on its next failed request.
+
+### UI / accessibility
+
+One `Dialog` component (focus trap, Escape, focus return, labelled by its
+title) replaces seven hand-rolled overlays and every native
+`confirm()`/`alert()`. The admin sidebar collapses to a rail under 768px.
+Pinch-zoom is re-enabled on every page. White text on the amber (1.9:1) and
+orange (3.3:1) fills is now dark ink. Panels that rendered nothing on a
+failed request say so. Categories and tables can be renamed; the CSV follows
+the selected range; the desk shows cancelled orders by name and a banner
+when its live stream drops; login lands on the page the role belongs to;
+inline TR/EN strings moved into `i18n.ts`.
+
+### Hygiene
+
+Seven `.claude/worktrees/*` entries committed as dangling submodule pointers
+are gone and the directory is ignored; eslint ignores `.claude/**` (a local
+lint reported 33,130 phantom problems); the HTML mockup, project report and
+work orders moved to `docs/archive`; the Neon/Upstash skill files from the
+abandoned cloud deployment are removed; `.env.example` is now tracked.
+
+### Tests
+
+228 → 299. New: SSE teardown, table delete, shim protocol (real process),
+rate-limit trust and global budget, bridge auth by hash, desk transitions,
+settlement, order-edit route, login limits, CSV, CSP, edit/settle
+concurrency.
+
+### Left for the owner
+
+- Rotate and delete the stale Vercel/Neon/Upstash credentials still in the
+  main checkout's `.env.local` and `.env.bak-*`; they are gitignored but on
+  disk.
+- Set `PRINTER_ACK=1` in the venue agent's environment (WALKTHROUGH §12).
+- Set `TRUST_PROXY=1` only behind Caddy, with Node bound to loopback
+  (ONPREM_SETUP §3).
+- The venue trip in `plan.md` still comes before everything above.
+
+---
+
 ## 2026-09-14 — Desk order editing
 
 **Asked for:** the last large item from the review. Correcting an order meant

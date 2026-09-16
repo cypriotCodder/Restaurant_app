@@ -61,9 +61,10 @@ The customer → backend → desk flow is fully standalone. On **accept**, a tic
 ```bash
 BASE_URL=https://your-app BRIDGE_KEY=<see seed output> PRINTER_HOST=192.168.1.50 node bridge/agent.mjs
 # DRY_RUN=1 to print to stdout instead of the printer
+# PRINTER_ACK=1 when PRINTER_HOST is bridge/win-usb-print.mjs (USB printer on Windows)
 ```
 
-The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP only, and prints to the same network kitchen printer (port 9100) AKINSOFT prints to. Failed prints show a "YAZICI HATASI" badge on the desk — nothing is ever silently lost. Deeper AKINSOFT integration (Wolvox local import surface, or Entegra-style middleware) slots in as another adapter once the venue's exact module/license is confirmed.
+The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP only, and prints to the same network kitchen printer (port 9100) AKINSOFT prints to. Failed prints show a "YAZICI HATASI" badge on the desk — nothing is ever silently lost. Bridge keys are stored hashed; the plaintext is shown once when issued. Deeper AKINSOFT integration (Wolvox local import surface, or Entegra-style middleware) slots in as another adapter once the venue's exact module/license is confirmed.
 
 ## Testing on a phone
 
@@ -100,7 +101,9 @@ Next.js App Router (TS) · Prisma 6 + **PostgreSQL** on the same machine · SSE 
 `src/lib/env.ts` validates the environment at boot (via `src/instrumentation.ts`). There are no
 fallbacks: an install missing `AUTH_SECRET`, `DATABASE_URL`, `CRON_SECRET` or
 `NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured. `UPLOAD_DIR`
-defaults to `/var/lib/masadan/uploads`.
+defaults to `/var/lib/masadan/uploads`. `TRUST_PROXY=1` tells the rate limiter a reverse
+proxy is appending the real client address to `X-Forwarded-For`; leave it unset when Node
+is reachable directly.
 
 ## Release gate: NEXT_PUBLIC_BASE_URL
 

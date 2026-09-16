@@ -26,28 +26,23 @@ function devOrigins(): string[] {
   return origins;
 }
 
+// Rendered pages get a per-request nonce policy from src/proxy.ts. This static
+// one covers what the proxy skips — API responses, static chunks, the image
+// optimiser — none of which render HTML, so it is a floor rather than the
+// policy that matters. No script source is allowed at all here.
+//
+// 'unsafe-eval' in DEVELOPMENT ONLY: React's development build calls eval()
+// for debugging features (reconstructing callstacks across environments).
+// Without it the browser refuses, React never mounts, and every page renders
+// as the bare server-side shell — which looked like a broken QR code. React
+// states it never uses eval() in production, so the deployed policy stays
+// strict.
 const csp = [
   "default-src 'self'",
-  // Next's inline bootstrap and hydration payload require 'unsafe-inline'
-  // here; there is no third-party script origin to allow beyond that.
-  //
-  // 'unsafe-eval' in DEVELOPMENT ONLY. React's development build calls eval()
-  // for debugging features (reconstructing callstacks across environments).
-  // Without it the browser refuses, React never mounts, and every page renders
-  // as the bare server-side shell — which looked like a broken QR code.
-  //
-  // Confirmed from the browser console, not by inspecting the bundle: grepping
-  // the dev chunks for "eval(" finds nothing, because the call is not a literal
-  // in the shipped text. React states it never uses eval() in production, so
-  // the deployed policy stays strict.
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-  // Tailwind and the design tokens are applied as inline style attributes.
+  `script-src 'none'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  // Menu photos are served from this origin via /api/media; data: and blob:
-  // cover the generated QR PNGs and client-side image previews.
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  // XHR/SSE are same-origin only.
   "connect-src 'self'",
   "form-action 'self'",
   "base-uri 'self'",
@@ -106,8 +101,14 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
-          { key: "Content-Security-Policy", value: csp },
         ],
+      },
+      {
+        // Exactly the paths src/proxy.ts's matcher excludes. Two CSP headers
+        // on one response are intersected by the browser, so the static
+        // policy must not also land on pages the proxy already covers.
+        source: "/(api|_next)/:path*",
+        headers: [{ key: "Content-Security-Policy", value: csp }],
       },
     ];
   },
