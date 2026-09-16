@@ -53,8 +53,15 @@ describe("POST /api/auth/login", () => {
     expect(await a.json()).toEqual(await b.json());
   });
 
+  it("names the landing page from the role", async () => {
+    loginStaff.mockResolvedValue({ token: "t", role: "admin" });
+    expect(await (await login("admin@example.com", "pw")).json()).toMatchObject({ redirect: "/admin" });
+    loginStaff.mockResolvedValue({ token: "t", role: "desk" });
+    expect(await (await login("desk@example.com", "pw")).json()).toMatchObject({ redirect: "/desk" });
+  });
+
   it("sets an httpOnly, secure, lax session cookie on success", async () => {
-    loginStaff.mockResolvedValue("jwt-token");
+    loginStaff.mockResolvedValue({ token: "jwt-token", role: "desk" });
     const res = await login("admin@example.com", "pw");
     expect(res.status).toBe(200);
     const cookie = res.cookies.get("staff_session");

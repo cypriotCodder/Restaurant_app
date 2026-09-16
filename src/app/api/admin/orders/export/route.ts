@@ -6,7 +6,10 @@ import { requireStaff } from "@/lib/staffAuth";
 export async function GET(req: NextRequest) {
   const staff = await requireStaff("admin");
   if (!staff) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const days = Number(req.nextUrl.searchParams.get("days")) || 30;
+  // Same ceiling as the order log: a year is the most anyone reconciles, and
+  // an unbounded range would pull the whole table into one response.
+  const requested = Number(req.nextUrl.searchParams.get("days"));
+  const days = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 365) : 30;
 
   const orders = await db.order.findMany({
     where: { venueId: staff.venueId, createdAt: { gt: new Date(Date.now() - days * 86400000) } },
@@ -14,7 +17,14 @@ export async function GET(req: NextRequest) {
     include: { items: true, table: true, visit: { select: { paymentMethod: true, closedReason: true } } },
   });
 
-  const esc = (v: string | number) => `"${String(v).replaceAll('"', '""')}"`;
+  // Quoted, and a leading formula trigger is neutralised: item names and
+  // notes come from the menu and from customers' phones, and Excel would
+  // otherwise evaluate a note beginning with "=" or "@" on the owner's PC.
+  const esc = (v: string | number) => {
+    const s = String(v);
+    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
   const rows = [
     ["order_number", "created_at", "table", "status", "reject_reason", "item", "qty", "unit_price_try", "line_total_try", "note", "modifiers", "order_total_try", "payment_status", "payment_method", "visit_outcome"].join(","),
   ];

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
+import Dialog from "../Dialog";
 import type { StaffFormValues, StaffRow } from "./types";
 // Staff tokens are stateless 12h JWTs, so "sign out everywhere" and
 // deactivation both work by bumping the account's token version. Revocation
@@ -14,7 +15,7 @@ import type { StaffFormValues, StaffRow } from "./types";
 // account is — role, password, deactivation — bumps its token version and takes
 // effect within the 30s account-cache window rather than in 12 hours.
 export default function StaffPanel() {
-  const { data, mutate } = useSWR<{ staff: StaffRow[]; self: string }>("/api/admin/staff", swrDefaults);
+  const { data, error: swrError, mutate } = useSWR<{ staff: StaffRow[]; self: string }>("/api/admin/staff", swrDefaults);
   const rows = data?.staff ?? [];
   const self = data?.self ?? "";
   const [busy, setBusy] = useState<string | null>(null);
@@ -53,7 +54,15 @@ export default function StaffPanel() {
       </div>
 
       {error && (
-        <p className="text-sm mb-3" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>
+        <p className="text-sm mb-3" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>
+      )}
+      {data === undefined && !swrError && (
+        <p className="text-sm" style={{ color: "var(--color-neutral-900)" }}>Yükleniyor… / Loading…</p>
+      )}
+      {swrError && (
+        <p className="text-sm mb-3" role="alert" style={{ color: "var(--color-heaven-orange)" }}>
+          Personel listesi yüklenemedi / Could not load staff
+        </p>
       )}
 
       <div className="flex flex-col gap-3">
@@ -217,19 +226,8 @@ function StaffForm({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={() => !busy && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        className="bg-white p-5 w-full max-w-sm flex flex-col gap-3"
-        style={{ border: "2px solid var(--color-text)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="wordmark text-base">{title}</h2>
-
+    <Dialog title={title} onClose={onClose} busy={busy} width="max-w-sm">
+      <form onSubmit={submit} className="flex flex-col gap-3">
         {!existing && (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-bold uppercase tracking-wide">E-POSTA / EMAIL</span>
@@ -292,7 +290,7 @@ function StaffForm({
           </span>
         </label>
 
-        {error && <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+        {error && <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
 
         <div className="flex gap-2 mt-1">
           <button disabled={busy} className="btn btn-primary flex-1 justify-center py-3">
@@ -303,6 +301,6 @@ function StaffForm({
           </button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

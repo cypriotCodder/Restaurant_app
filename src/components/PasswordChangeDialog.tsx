@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Dialog from "./Dialog";
 
 /**
  * Self-service password change, reachable from the desk as well as the admin
@@ -28,14 +29,14 @@ export default function PasswordChangeDialog({ onClose }: { onClose: () => void 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword: current, newPassword: next }),
-    });
+    }).catch(() => null);
     setBusy(false);
-    if (res.ok) {
+    if (res?.ok) {
       setDone(true);
       setTimeout(onClose, 2000);
       return;
     }
-    const b = await res.json().catch(() => ({}));
+    const b = (await res?.json().catch(() => ({}))) ?? {};
     setError(
       b.error === "wrong_password"
         ? "Mevcut şifre hatalı / Current password is incorrect"
@@ -46,21 +47,10 @@ export default function PasswordChangeDialog({ onClose }: { onClose: () => void 
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={() => !busy && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        className="bg-white p-5 w-full max-w-sm flex flex-col gap-3"
-        style={{ border: "2px solid var(--color-text)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="wordmark text-base">ŞİFRE DEĞİŞTİR / CHANGE PASSWORD</h2>
-
+    <Dialog title="ŞİFRE DEĞİŞTİR / CHANGE PASSWORD" onClose={onClose} busy={busy} width="max-w-sm">
+      <form onSubmit={submit} className="flex flex-col gap-3">
         {done ? (
-          <p className="text-sm py-4" style={{ color: "var(--color-accent-700)" }}>
+          <p className="text-sm py-4" role="status" style={{ color: "var(--color-accent-700)" }}>
             Şifreniz değiştirildi. Diğer cihazlardan çıkış yapıldı.
             <br />
             Password changed. Other devices have been signed out.
@@ -76,6 +66,7 @@ export default function PasswordChangeDialog({ onClose }: { onClose: () => void 
                 value={current}
                 onChange={(e) => setCurrent(e.target.value)}
                 className="input"
+                data-autofocus
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -103,7 +94,7 @@ export default function PasswordChangeDialog({ onClose }: { onClose: () => void 
             <p className="text-xs" style={{ color: "var(--color-neutral-900)" }}>
               En az 8 karakter. Bu cihazda oturumunuz açık kalır, diğerleri kapanır.
             </p>
-            {error && <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+            {error && <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
             <div className="flex gap-2 mt-1">
               <button disabled={busy} className="btn btn-primary flex-1 justify-center py-3">
                 {busy ? "..." : "Kaydet / Save"}
@@ -115,6 +106,6 @@ export default function PasswordChangeDialog({ onClose }: { onClose: () => void 
           </>
         )}
       </form>
-    </div>
+    </Dialog>
   );
 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
+import { ConfirmDialog } from "../Dialog";
 import type { BridgeKeyRow } from "./types";
 // The on-prem bridge agent authenticates with one of these. Previously they
 // existed only from the seed, so replacing a compromised key meant SQL.
@@ -13,27 +14,34 @@ export default function BridgeKeyPanel() {
   const [label, setLabel] = useState("");
   const [issued, setIssued] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
+  const [removing, setRemoving] = useState<BridgeKeyRow | null>(null);
+  const [error, setError] = useState("");
 
   async function create() {
     setBusy(true);
+    setError("");
     const res = await fetch("/api/admin/bridge-keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ label }),
-    });
+    }).catch(() => null);
     setBusy(false);
-    if (res.ok) {
+    if (res?.ok) {
       const d = await res.json();
       setIssued(d.key);
       setLabel("");
       await mutate();
+    } else {
+      setError("Anahtar oluşturulamadı / Could not create key");
     }
   }
 
   async function remove(id: string) {
-    if (!confirm("Bu anahtar silinsin mi? Kullanan ajan çalışmayı durdurur.")) return;
-    await fetch(`/api/admin/bridge-keys?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    setBusy(true);
+    const res = await fetch(`/api/admin/bridge-keys?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null);
+    setBusy(false);
+    setRemoving(null);
+    if (!res?.ok) setError("Anahtar silinemedi / Could not delete key");
     await mutate();
   }
 
@@ -73,10 +81,31 @@ export default function BridgeKeyPanel() {
                 {" "}· {k.hint} · {new Date(k.createdAt).toLocaleDateString("tr-TR")}
               </span>
             </span>
-            <button onClick={() => remove(k.id)} className="btn btn-ghost">Sil / Delete</button>
+            <button onClick={() => setRemoving(k)} className="btn btn-ghost">Sil / Delete</button>
           </div>
         ))}
       </div>
+
+      {error && <p className="text-sm mt-2" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+
+      {removing && (
+        <ConfirmDialog
+          title="Anahtar silinsin mi? / Delete this key?"
+          body={
+            <>
+              <strong>{removing.label}</strong> ({removing.hint}) — bu anahtarı kullanan ajan
+              çalışmayı durdurur ve mutfak yazıcısı basmaz.
+              <br />
+              The agent using it stops and the kitchen printer goes quiet.
+            </>
+          }
+          confirmLabel="Sil / Delete"
+          danger
+          busy={busy}
+          onConfirm={() => remove(removing.id)}
+          onCancel={() => setRemoving(null)}
+        />
+      )}
 
       <div className="flex gap-2 mt-3 pt-3" style={{ borderTop: "1px solid var(--color-divider)" }}>
         <input

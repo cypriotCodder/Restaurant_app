@@ -9,7 +9,7 @@ import type { VenueForm } from "./types";
 export default function VenuePanel() {
   // Shares the /api/admin/venue key with BridgeKeyPanel, so the two panels
   // cost one request between them.
-  const { data } = useSWR<{
+  const { data, error: loadError } = useSWR<{
     venue: VenueForm;
     options: { currencies: string[]; posAdapters: string[] };
   }>("/api/admin/venue", swrDefaults);
@@ -52,7 +52,21 @@ export default function VenuePanel() {
     setError(b.detail ?? "Kaydedilemedi / Could not save");
   }
 
-  if (!form) return null;
+  // A blank panel used to be the only sign that the request had failed.
+  if (!form) {
+    return (
+      <div className="card" style={{ maxWidth: 600 }}>
+        <h3 className="text-xs font-bold uppercase tracking-wide mb-2">Restoran / Venue</h3>
+        {loadError ? (
+          <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>
+            Ayarlar yüklenemedi — sayfayı yenileyin. / Could not load settings; reload the page.
+          </p>
+        ) : (
+          <p className="text-sm" style={{ color: "var(--color-neutral-900)" }}>Yükleniyor… / Loading…</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={save} className="card flex flex-col gap-3" style={{ maxWidth: 600 }}>
@@ -121,7 +135,7 @@ export default function VenuePanel() {
         </span>
       </label>
 
-      {error && <p className="text-sm" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
+      {error && <p className="text-sm" role="alert" style={{ color: "var(--color-heaven-orange)" }}>{error}</p>}
 
       <div className="flex items-center gap-3">
         <button disabled={busy} className="btn btn-primary justify-center py-3">

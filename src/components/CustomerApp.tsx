@@ -7,6 +7,7 @@ import { formatKurus } from "@/lib/money";
 import useSWR from "swr";
 import { swrDefaults } from "@/lib/swr";
 import { CurrencyProvider } from "./MoneyContext";
+import { ConfirmDialog } from "./Dialog";
 import BillPanel from "./customer/BillPanel";
 import CartBar from "./customer/CartBar";
 import Header from "./customer/Header";
@@ -116,10 +117,11 @@ export default function CustomerApp({ code }: { code: string }) {
   }, [loadMenu, loadOrders, loadBill]);
 
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
 
   async function cancelOrder(orderId: string) {
     if (cancelling) return;
-    if (!confirm(t(locale, "confirmCancelOrder"))) return;
+    setConfirmCancel(null);
     setCancelling(orderId);
     const res = await fetch(`/api/orders/${orderId}/cancel`, { method: "POST" }).catch(() => null);
     setCancelling(null);
@@ -267,8 +269,19 @@ export default function CustomerApp({ code }: { code: string }) {
             orders={orders}
             locale={locale}
             money={money}
-            cancelOrder={cancelOrder}
+            cancelOrder={setConfirmCancel}
             cancelling={cancelling}
+          />
+        )}
+
+        {confirmCancel && (
+          <ConfirmDialog
+            title={t(locale, "confirmCancelOrder")}
+            confirmLabel={t(locale, "cancelOrder")}
+            cancelLabel={t(locale, "close")}
+            danger
+            onConfirm={() => cancelOrder(confirmCancel)}
+            onCancel={() => setConfirmCancel(null)}
           />
         )}
 
