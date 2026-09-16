@@ -34,6 +34,14 @@ const FAIL_WINDOW_SEC = 10 * 60;
 const OK_LIMIT = 300;
 const OK_WINDOW_SEC = 10 * 60;
 
+/**
+ * Failed scans venue-wide, regardless of address. The per-IP cap can be evaded
+ * by forging X-Forwarded-For when no trusted proxy is in front, so this bounds
+ * the ledger writes a flood can cause no matter how many addresses it claims.
+ * Legitimate failures (a regenerated card mid-meal) are a handful a night.
+ */
+const GLOBAL_FAIL_LIMIT = 200;
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
@@ -64,12 +72,20 @@ export async function GET(
     include: { venue: true },
   });
 
+  // Ledger writes for failures are additionally bounded venue-wide; the wall
+  // is still returned, only the row is skipped once the cap is reached.
+  const logFailure = async (outcome: string, extra: Parameters<typeof logAttempt>[2]) => {
+    if (rateLimit("scan:fail:all", GLOBAL_FAIL_LIMIT, FAIL_WINDOW_SEC).allowed) {
+      await logAttempt(req, outcome, extra);
+    }
+  };
+
   if (!table || !table.active) {
-    await logAttempt(req, "table_inactive", { tableId: table?.id, venueId: table?.venueId, detail: code });
+    await logFailure("table_inactive", { tableId: table?.id, venueId: table?.venueId, detail: code });
     return wall();
   }
   if (!verifyTableQr(table.venue.qrSecret, table.code, table.qrVersion, sig)) {
-    await logAttempt(req, "invalid_qr", { tableId: table.id, venueId: table.venueId });
+    await logFailure("invalid_qr", { tableId: table.id, venueId: table.venueId });
     return wall();
   }
 

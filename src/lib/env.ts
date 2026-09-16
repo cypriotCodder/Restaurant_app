@@ -28,6 +28,11 @@ const schema = z.object({
   // Absolute path menu photos are written to. Keep it OUTSIDE the application
   // directory so an app update cannot delete the venue's uploaded images.
   UPLOAD_DIR: z.string().min(1).default("/var/lib/masadan/uploads"),
+  // "1" when a reverse proxy (Caddy/nginx) fronts the app and APPENDS the real
+  // client address to X-Forwarded-For. The rate limiter then reads the last hop
+  // of that header, which the proxy wrote, rather than the first, which the
+  // client can write. Leave at "0" when the Node server is exposed directly.
+  TRUST_PROXY: z.enum(["0", "1"]).default("0"),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -78,4 +83,9 @@ export function baseUrl(): string {
  */
 export function isSecureOrigin(): boolean {
   return getEnv().NEXT_PUBLIC_BASE_URL.startsWith("https://");
+}
+
+/** True when X-Forwarded-For's last hop was written by a proxy we run. */
+export function trustProxy(): boolean {
+  return getEnv().TRUST_PROXY === "1";
 }

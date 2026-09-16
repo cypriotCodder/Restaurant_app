@@ -108,7 +108,18 @@ NEXT_PUBLIC_BASE_URL="https://pos.theheaven.app"
 
 # Outside the app directory, so an update cannot delete the venue's photos.
 UPLOAD_DIR=/var/lib/masadan/uploads
+
+# Caddy (§2) is in front, so the client address it appends to
+# X-Forwarded-For is the one the login and scan rate limits key on.
+TRUST_PROXY=1
 ```
+
+> `TRUST_PROXY=1` is only correct when **every** request reaches Node through
+> the proxy. Bind the app to `127.0.0.1` (`HOST=127.0.0.1` in the env file)
+> so a phone on the LAN cannot reach port 3000 directly and hand the limiter a
+> forged address. Caddy replaces any `X-Forwarded-For` a client sends unless
+> that client is listed in `trusted_proxies`, which is the behaviour relied on
+> here.
 
 ```bash
 sudo mkdir -p /var/lib/masadan/uploads

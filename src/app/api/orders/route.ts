@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getActiveSession } from "@/lib/tableSession";
 import { logAttempt } from "@/lib/attempts";
 import { publish } from "@/lib/bus";
+import { clientIp, writeBudget } from "@/lib/rateLimit";
 
 const orderSchema = z.object({
   items: z
@@ -27,10 +28,21 @@ const MAX_ORDERS_PER_SESSION_WINDOW = 5;
 const SESSION_WINDOW_MS = 10 * 60 * 1000;
 const MAX_OPEN_ORDERS_PER_TABLE = 10;
 
+/**
+ * Ledger rows a caller WITHOUT a session may write. Anyone can POST here, and
+ * before this every sessionless attempt was an unbounded insert — the same
+ * disk-fill the scan route was hardened against. The response is unchanged;
+ * only the row is skipped past the cap.
+ */
+const NO_SESSION_PER_IP = { limit: 20, windowSec: 10 * 60 };
+const NO_SESSION_GLOBAL = { limit: 200, windowSec: 10 * 60 };
+
 export async function POST(req: NextRequest) {
   const session = await getActiveSession();
   if (!session) {
-    await logAttempt(req, "expired_session");
+    if (writeBudget("order:nosession", clientIp(req), NO_SESSION_PER_IP, NO_SESSION_GLOBAL)) {
+      await logAttempt(req, "expired_session");
+    }
     return NextResponse.json({ error: "no_session" }, { status: 401 });
   }
   const base = { venueId: session.venueId, tableId: session.tableId, sessionId: session.id };

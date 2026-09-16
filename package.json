@@ -17,6 +17,9 @@
     "package:venue": "npm run package && node scripts/prune-engines.mjs --keep windows",
     "dev:origin": "node --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/dev-origin.mjs"
   },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0"
+  },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",

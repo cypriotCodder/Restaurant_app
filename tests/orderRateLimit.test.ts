@@ -38,6 +38,7 @@ vi.mock("@/lib/attempts", () => ({ logAttempt: (...a: unknown[]) => logAttempt(.
 vi.mock("@/lib/bus", () => ({ publish: (...a: unknown[]) => publish(...a) }));
 
 const { POST } = await import("@/app/api/orders/route");
+const { resetRateLimits } = await import("@/lib/rateLimit");
 
 const SESSION = { id: "sess_1", venueId: "venue_1", tableId: "table_1", tableCode: "TBL1", tableName: "Masa 1" };
 
@@ -75,6 +76,34 @@ describe("session guard", () => {
     expect(await res.json()).toEqual({ error: "no_session" });
     expect(logAttempt).toHaveBeenCalledWith(expect.anything(), "expired_session");
     expect(orderCreate).not.toHaveBeenCalled();
+  });
+
+  it("stops writing ledger rows once sessionless posts are flooding", async () => {
+    // Anyone can POST here; before the cap every attempt was an insert.
+    getActiveSession.mockResolvedValue(null);
+    resetRateLimits();
+    for (let i = 0; i < 20; i++) await POST(request(ONE_ITEM));
+    expect(logAttempt).toHaveBeenCalledTimes(20);
+    for (let i = 0; i < 30; i++) {
+      // Still 401 — the response does not change, only the row is skipped.
+      expect((await POST(request(ONE_ITEM))).status).toBe(401);
+    }
+    expect(logAttempt).toHaveBeenCalledTimes(20);
+  });
+
+  it("caps sessionless ledger writes globally across forged addresses", async () => {
+    getActiveSession.mockResolvedValue(null);
+    resetRateLimits();
+    for (let i = 0; i < 300; i++) {
+      await POST(
+        new NextRequest("http://localhost/api/orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": `10.9.${i >> 8}.${i & 255}` },
+          body: JSON.stringify(ONE_ITEM),
+        })
+      );
+    }
+    expect(logAttempt).toHaveBeenCalledTimes(200);
   });
 });
 
