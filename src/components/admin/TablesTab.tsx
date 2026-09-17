@@ -86,7 +86,7 @@ export default function TablesTab() {
 
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
         {tables.map((tb) => (
-          <div key={tb.id} className="table-card" style={!tb.active ? { opacity: 0.5 } : undefined}>
+          <div key={tb.id} className="table-card" style={tb.active ? { background: "#d9f2df" } : { opacity: 0.5 }}>
             <p className="table-card-name">{tb.name}</p>
             <span className={`tag ${tb.activeSessions.length > 0 ? "tag-accent" : "tag-neutral"}`}>
               {tb.activeSessions.length > 0 ? (
@@ -104,23 +104,24 @@ export default function TablesTab() {
               </svg>
             </div>
             <div className="flex flex-col gap-1 items-center text-sm mt-1">
-              <button onClick={() => setQrFor(tb)} className="font-bold px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
+              <HoverLink onClick={() => setQrFor(tb)} className="font-bold">
                 İndir QR
-              </button>
+              </HoverLink>
               <div className="flex gap-2 flex-wrap justify-center">
-                <button onClick={() => setRenaming(tb)} className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
+                <HoverLink onClick={() => setRenaming(tb)} className="text-xs">
                   Adlandır
-                </button>
-                <button onClick={() => setRegenFor(tb)} className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
+                </HoverLink>
+                <HoverLink onClick={() => setRegenFor(tb)} className="text-xs">
                   QR Yenile
-                </button>
-                <button
+                </HoverLink>
+                <HoverLink
                   onClick={() => call(`/api/admin/tables/${tb.id}`, json("PATCH", { active: !tb.active }), "Güncellenemedi / Could not update")}
                   disabled={busy}
-                  className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-neutral-900)] enabled:hover:bg-[var(--color-heaven-orange)] enabled:hover:text-white"
+                  className="text-xs"
+                  variant="muted"
                 >
                   {tb.active ? "Kapat" : "Aç"}
-                </button>
+                </HoverLink>
               </div>
               {tb.activeSessions.length > 0 && (
                 <button
@@ -226,5 +227,43 @@ function RenameDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+// Hover colours are driven by pointer events rather than :hover so they show
+// even where the browser reports no hover capability (touch emulation).
+const HOVER_COLORS = {
+  accent: { idle: "var(--color-accent-700)", fg: "var(--color-text)", bg: "var(--color-accent-200)" },
+  muted: { idle: "var(--color-neutral-900)", fg: "#fff", bg: "var(--color-heaven-orange)" },
+};
+
+function HoverLink({
+  variant = "accent",
+  disabled,
+  style,
+  children,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: keyof typeof HOVER_COLORS }) {
+  const [hover, setHover] = useState(false);
+  const c = HOVER_COLORS[variant];
+  const on = hover && !disabled;
+  return (
+    <button
+      {...props}
+      disabled={disabled}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      style={{
+        color: on ? c.fg : c.idle,
+        background: on ? c.bg : "transparent",
+        padding: "2px 6px",
+        transition: "color 0.15s, background-color 0.15s",
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+        ...style,
+      }}
+    >
+      {children}
+    </button>
   );
 }
