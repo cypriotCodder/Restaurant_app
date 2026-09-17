@@ -104,20 +104,20 @@ export default function TablesTab() {
               </svg>
             </div>
             <div className="flex flex-col gap-1 items-center text-sm mt-1">
-              <button onClick={() => setQrFor(tb)} className="table-card-link font-bold">
+              <button onClick={() => setQrFor(tb)} className="font-bold px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
                 İndir QR
               </button>
               <div className="flex gap-2 flex-wrap justify-center">
-                <button onClick={() => setRenaming(tb)} className="table-card-link text-xs">
+                <button onClick={() => setRenaming(tb)} className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
                   Adlandır
                 </button>
-                <button onClick={() => setRegenFor(tb)} className="table-card-link text-xs">
+                <button onClick={() => setRegenFor(tb)} className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-accent-700)] hover:bg-[var(--color-accent-200)] hover:text-[var(--color-text)]">
                   QR Yenile
                 </button>
                 <button
                   onClick={() => call(`/api/admin/tables/${tb.id}`, json("PATCH", { active: !tb.active }), "Güncellenemedi / Could not update")}
                   disabled={busy}
-                  className="table-card-link table-card-link--muted text-xs"
+                  className="text-xs px-1.5 py-0.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-neutral-900)] enabled:hover:bg-[var(--color-heaven-orange)] enabled:hover:text-white"
                 >
                   {tb.active ? "Kapat" : "Aç"}
                 </button>
