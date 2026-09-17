@@ -488,6 +488,27 @@ section[id^="cat-"] {
   background: #fff;
 }
 
+.table-card-link {
+  color: var(--color-accent-700);
+  padding: 2px 6px;
+  transition: color 0.15s, background-color 0.15s;
+}
+.table-card-link:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-accent-200);
+}
+.table-card-link--muted {
+  color: var(--color-neutral-900);
+}
+.table-card-link--muted:hover:not(:disabled) {
+  color: #fff;
+  background: var(--color-heaven-orange);
+}
+.table-card-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── status dots ── */
 .status-dot {
   display: inline-block;

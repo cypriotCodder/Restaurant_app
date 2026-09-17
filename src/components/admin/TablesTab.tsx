@@ -104,20 +104,20 @@ export default function TablesTab() {
               </svg>
             </div>
             <div className="flex flex-col gap-1 items-center text-sm mt-1">
-              <button onClick={() => setQrFor(tb)} className="font-bold" style={{ color: "var(--color-accent-700)" }}>
+              <button onClick={() => setQrFor(tb)} className="table-card-link font-bold">
                 İndir QR
               </button>
               <div className="flex gap-2 flex-wrap justify-center">
-                <button onClick={() => setRenaming(tb)} className="text-xs" style={{ color: "var(--color-accent-700)" }}>
+                <button onClick={() => setRenaming(tb)} className="table-card-link text-xs">
                   Adlandır
                 </button>
-                <button onClick={() => setRegenFor(tb)} className="text-xs" style={{ color: "var(--color-accent-700)" }}>
+                <button onClick={() => setRegenFor(tb)} className="table-card-link text-xs">
                   QR Yenile
                 </button>
                 <button
                   onClick={() => call(`/api/admin/tables/${tb.id}`, json("PATCH", { active: !tb.active }), "Güncellenemedi / Could not update")}
                   disabled={busy}
-                  className="text-xs" style={{ color: "var(--color-neutral-900)" }}
+                  className="table-card-link table-card-link--muted text-xs"
                 >
                   {tb.active ? "Kapat" : "Aç"}
                 </button>
