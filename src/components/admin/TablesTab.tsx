@@ -86,7 +86,7 @@ export default function TablesTab() {
 
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
         {tables.map((tb) => (
-          <div key={tb.id} className="table-card" style={{ ...(tb.activeSessions.length > 0 && { background: "#d9f2df" }), ...(!tb.active && { opacity: 0.5 }) }}>
+          <div key={tb.id} className="table-card" style={{ ...(tb.activeSessions?.length > 0 ? { background: "#d9f2df" } : {}), ...(!tb.active ? { opacity: 0.5 } : {}) }}>
             <p className="table-card-name">{tb.name}</p>
             <span className={`tag ${tb.activeSessions.length > 0 ? "tag-accent" : "tag-neutral"}`}>
               {tb.activeSessions.length > 0 ? (
