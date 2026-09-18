@@ -217,17 +217,28 @@ mkdir C:\masadan-data\uploads -Force
 
 The bundle already contains `prisma/` (schema, migrations, `seed.mjs`), but
 **not** the Prisma CLI or `bcryptjs`: the build only packs what the running
-server imports. Install those two into the bundle once, with versions pinned to
-match the build. This needs internet on the venue machine; alternatively run it
-in a copy of the bundle on your Mac *before* step 2's USB copy (they are pure
-JavaScript, so a Mac install works on Windows).
+server imports.
+
+> **Never run `npm install` inside `C:\masadan`.** The bundle carries a copy of
+> the repo's `package.json`, so npm installs all ~445 dependencies over the
+> trimmed `node_modules` the build traced, and its `postinstall` re-runs
+> `prisma generate` on top of the generated client. The server then fails at
+> boot with `Failed to load external module @prisma/client-<hash>`. If that has
+> already happened, delete `C:\masadan` and copy the bundle again from the USB
+> stick.
+
+Do the migrating and seeding from a separate folder that has its own
+`node_modules`, so nothing touches the bundle. This needs internet once:
 
 ```powershell
-cd C:\masadan
-npm install --no-save prisma@6.19.3 bcryptjs@3.0.3
+mkdir C:\masadan-tools
+xcopy /E /I C:\masadan\prisma C:\masadan-tools\prisma
+cd C:\masadan-tools
+'{"name":"masadan-tools","private":true}' | Out-File -Encoding ascii package.json
+npm install prisma@6.19.3 @prisma/client@6.19.3 bcryptjs@3.0.3
 ```
 
-Then migrate and seed:
+Then migrate and seed from that folder:
 
 ```powershell
 $env:DATABASE_URL = "postgresql://masadan:choose-a-password@localhost:5432/masadan"
@@ -345,6 +356,7 @@ Work along the chain; each stage tells you where it stopped.
 |---|---|---|
 | Nothing anywhere, desk looks fine | Never queued | POS adapter is still `console`. Set `escpos_bridge`. |
 | Nothing, and you only *placed* the order | Never queued | Accept it at the desk. Placing does not print. |
+| Server: `Failed to load external module @prisma/client-<hash>` | App won't boot | `npm install` was run inside `C:\masadan` and overwrote the bundle. Delete it and re-copy from the USB stick; see step 8. |
 | Agent: `pending fetch: HTTP 401` | Agent → app | Wrong or revoked `BRIDGE_KEY`. Create a new one. |
 | Agent: `pending fetch` connection refused | Agent → app | App not running, or wrong `BASE_URL`. Check `/api/health`. |
 | Agent: `printer timeout` after 10s | Agent → shim | Shim is not running, or not on 9100. |
