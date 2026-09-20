@@ -31,10 +31,20 @@ export async function PATCH(
     return NextResponse.json({ error: "reason_required" }, { status: 400 });
   }
 
-  const updated = await db.order.update({
-    where: { id },
+  // Conditional update, for the same reason the customer's cancel is one: two
+  // desk devices (or one double-tap on a slow link) must not both win this
+  // transition. Accepting twice is the expensive version — each acceptance
+  // enqueues a kitchen ticket, and the kitchen cooks what it is handed.
+  const { count } = await db.order.updateMany({
+    where: { id, status: order.status },
     data: { status, rejectReason: status === "rejected" ? String(rejectReason).slice(0, 200) : null },
   });
+  if (count === 0) {
+    // Someone else moved it between the read and the write.
+    const now = await db.order.findFirst({ where: { id, venueId: staff.venueId }, select: { status: true } });
+    return NextResponse.json({ error: "invalid_transition", from: now?.status ?? order.status }, { status: 409 });
+  }
+  const updated = { ...order, status, sessionId: order.sessionId, tableId: order.tableId };
 
   // Acceptance is the POS handoff point: ticket goes to the outbox →
   // AKINSOFT bridge (print). Failure there never blocks this response, but the
