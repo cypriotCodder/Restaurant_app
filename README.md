@@ -1,123 +1,149 @@
-# Masadan Sipariş — QR Table Ordering
+# Masadan Sipariş — Restaurant QR Ordering
 
-Customers scan a QR at their table, browse the menu on their phone (no app, no account), order, and watch live status. Orders hit the kitchen's order-desk dashboard instantly and are bridged to the venue's existing AKINSOFT setup via ESC/POS kitchen printing.
+## Overview
 
-## Run
+A self-hosted restaurant ordering application built with TypeScript, Next.js, and PostgreSQL. Customers scan a signed table QR code, browse a bilingual menu, place orders, and follow their status without creating an account. Staff manage orders and table bills from a live desk, while administrators maintain the menu, tables, staff accounts, and printer integration.
 
-```bash
-npm install
-cp .env.example .env.local   # then fill in DATABASE_URL and the two secrets
-npm run migrate:deploy       # apply migrations to Postgres
-npm run seed                 # venue: menu, 8 tables, staff users, bridge key
-npm run dev                  # http://localhost:3000
+The system is designed for a single long-running server on the restaurant's local network. Payments are taken at the till; the application records settlement rather than processing online payments.
+
+## Engineering highlights
+
+- **End-to-end workflows:** menu modifiers and notes, order status transitions, item edits and voids, shared table bills, and table settlement.
+- **Live updates:** Server-Sent Events (SSE) connect customer and staff views to an in-process event bus.
+- **Explicit data modelling:** venue-scoped records, integer kuruş amounts, and snapshots of item names and prices preserve order history as the menu changes.
+- **Security controls:** signed QR payloads, expiring table sessions, staff roles, request limits, and an order-attempt audit ledger.
+- **Printer delivery lifecycle:** a PostgreSQL outbox tracks claims, acknowledgements, retries, and failed deliveries independently of the desk workflow.
+- **Performance-conscious implementation:** server-rendered menu data, a per-venue memory cache invalidated on menu changes, throttled session timestamp writes, and uploaded photos resized to WebP with a maximum edge of 1200px.
+
+## Architecture
+
+```text
+Customer browser          Staff / admin browser
+       | HTTPS + SSE              | HTTPS + SSE
+       +-------------+------------+
+                     |
+          Next.js application (one Node.js process)
+          |          |               |
+      PostgreSQL  Local photos   In-process event bus
+          |                      and maintenance scheduler
+     POS outbox
+          ^
+          | HTTP polling + acknowledgements
+     Bridge agent ---- TCP 9100 ---- ESC/POS printer
+                      or Windows USB print shim
 ```
 
-`.env.local` holds local credentials and is gitignored; `prisma.config.ts` loads it so
-the Prisma CLI targets the same database the app does.
+Prisma manages PostgreSQL access and migrations. Photos live in `UPLOAD_DIR` and are served through `/api/media`. An in-process scheduler reconciles POS deliveries and prunes retained data. The application does not require Redis, hosted object storage, or an external scheduler.
 
-The app is **self-hosted**: it runs as a single long-lived Node server on the venue's
-own machine, with Postgres beside it and no managed cloud services.
-To install it in a restaurant, see **[ONPREM_SETUP.md](ONPREM_SETUP.md)**.
+**Run one application process.** Live events, caches, and some rate limits are held in memory. Multiple replicas would require shared coordination before live updates and limits could work consistently across them.
 
-### Staff / Admin Credentials
+## Application surfaces
 
-The database seed creates two staff accounts by default:
-- **Admin Account (`/admin`):** Email `admin@theheaven.local` (overridden via `SEED_ADMIN_EMAIL`)
-- **Desk/Kitchen Account (`/desk`):** Email `desk@theheaven.local` (overridden via `SEED_DESK_EMAIL`)
+| Route | Audience | Capabilities |
+| --- | --- | --- |
+| `/scan/{code}?k={sig}` | Customer | Validate a signed QR, create a table session, and redirect to the menu. |
+| `/t/{code}` | Customer | Turkish/English menu, cart, modifiers, notes, live order status, and table bill. |
+| `/login` | Staff | Staff sign-in. |
+| `/desk` | Kitchen / front of house | Live tickets, order status changes, item edits, table bills, settlement, and printer-failure indicators. |
+| `/admin` | Administrator | Menu, categories, modifiers, photos, availability, tables and QR codes, sessions, staff, reporting, CSV export, and printer health. |
+| `/api/health` | Operator | Database and scheduler health; authenticated requests can receive diagnostic detail. |
 
-**Passwords:**
-- You can define custom passwords in `.env.local` using `SEED_ADMIN_PASSWORD` and `SEED_DESK_PASSWORD`.
-- If unset in `.env.local`, the seed script (`npm run seed`) generates random 12-character passwords and prints them **once** in the terminal logs. Capture them then, as they are hashed in the database and not stored in plain text anywhere.
+## Security model
 
-The landing page lists per-table "scan" links that are byte-identical to what each printed QR encodes.
+QR codes contain an HMAC signature over `tableCode:qrVersion`, using the venue's QR secret. Regenerating a table's QR advances its version and revokes its live sessions. Rotating the venue QR secret invalidates all of that venue's printed codes.
 
-## Surfaces
+Customer sessions use an HttpOnly cookie and are bound to a table. They have a two-hour hard expiry, a 30-minute idle timeout, and a six-session per-table cap, with staff revocation available. Orders are limited to five per session in ten minutes and ten open orders per table. An `OrderAttempt` ledger records attempts for abuse investigation.
 
-| URL | Who | What |
-|---|---|---|
-| `/scan/{code}?k={sig}` | customer (via QR) | verifies signature, mints table session, → menu |
-| `/t/{code}` | customer | menu · cart · modifiers · notes · live order status (TR/EN) |
-| `/desk` | kitchen/desk staff | live ticket board (SSE), accept/reject/preparing/ready/served, elapsed timers, new-session + printer-failure badges |
-| `/admin` | owner | menu/category/modifier CRUD, photos, live 86 toggle, tables + QR print/regenerate, session kill, order log + CSV |
+Staff authentication uses hashed passwords and signed session tokens, with admin/desk role checks and account/token-version validation. Bridge keys are stored hashed and their plaintext is shown when issued. Required environment values are validated at startup.
 
-## Anti-remote-ordering design
+A signed URL cannot prove physical presence: a copied, still-valid QR can be reused remotely. Staff acceptance, visible table attribution, new-session indicators, and pay-at-till are operational backstops. Geolocation and venue-IP presence checks are not implemented.
 
-A QR is just a URL — no software check can prove a *scan*. The layers:
+## POS / printer bridge
 
-1. **Signed QR payload**: `k = HMAC(venue.qrSecret, tableCode:qrVersion)`. Admin "QR Yenile" bumps `qrVersion`, killing every photo/screenshot of the old code and all live sessions for the table.
-2. **Table-bound sessions** (httpOnly cookie, minted only by a valid scan): 2 h hard cap, 30 min idle timeout, max 6 concurrent per table, staff-revocable. Bare URLs without a session get the re-scan wall; the cart survives in localStorage across re-scan.
-3. **Human + economic backstop**: pay-at-till means a remote prankster gains nothing; every order needs staff *accept*, arrives tagged to a visible physical table, first order of a new session is badged "YENİ OTURUM".
-4. **Rate limits** (5 orders/session/10 min, 10 open orders/table) and a full `OrderAttempt` ledger (every attempt incl. forged signatures, expired sessions, validation failures — with IP/UA) for abuse analysis.
+Accepted orders are queued in the `PosDelivery` outbox. The configured `Venue.posAdapter` selects:
 
-Deferred by choice: venue-IP/geolocation advisory flags (schema and desk badging make this a small add later).
-
-## POS / AKINSOFT bridge
-
-The customer → backend → desk flow is fully standalone. On **accept**, a ticket is written to the `PosDelivery` outbox and rendered by the venue's configured adapter (`Venue.posAdapter`):
-
-- `console` — dev: prints ticket to server stdout.
-- `escpos_bridge` — **primary**: raw ESC/POS bytes, pulled by the on-prem agent:
+- `console`: development output to server stdout.
+- `escpos_bridge`: ESC/POS tickets pulled by the on-premises agent.
 
 ```bash
-BASE_URL=https://your-app BRIDGE_KEY=<see seed output> PRINTER_HOST=192.168.1.50 node bridge/agent.mjs
-# DRY_RUN=1 to print to stdout instead of the printer
-# PRINTER_ACK=1 when PRINTER_HOST is bridge/win-usb-print.mjs (USB printer on Windows)
+BASE_URL=https://your-app BRIDGE_KEY=<issued-key> PRINTER_HOST=192.168.1.50 node bridge/agent.mjs
 ```
 
-The agent runs on any LAN machine (till PC / Raspberry Pi), makes outbound HTTP only, and prints to the same network kitchen printer (port 9100) AKINSOFT prints to. Failed prints show a "YAZICI HATASI" badge on the desk — nothing is ever silently lost. Bridge keys are stored hashed; the plaintext is shown once when issued. Deeper AKINSOFT integration (Wolvox local import surface, or Entegra-style middleware) slots in as another adapter once the venue's exact module/license is confirmed.
+The agent makes outbound HTTP requests to the application and sends tickets to a LAN printer, normally on TCP port 9100. Use `DRY_RUN=1` to inspect output without printing. Use `PRINTER_ACK=1` only when connecting to `bridge/win-usb-print.mjs`, which acknowledges Windows USB print jobs; an ordinary network printer does not provide that acknowledgement.
 
-## Performance notes
+Stale claims are reclaimed and retries are bounded; failed deliveries are surfaced to staff and can be retried from the admin interface. Delivery acknowledgement is not a guarantee that paper physically printed. Check the printer during installation and monitor failed deliveries during service.
 
-The customer menu is rendered on the server into the first HTML response and
-served from a per-venue in-memory copy that the `menu.changed` bus event
-drops, so a scan costs one database round-trip for the session and none for
-the menu. Session validation writes `lastSeenAt` at most once a minute.
-Uploaded photos are resized to ≤1200px WebP before they are stored
-(`npm run photos:reprocess` converts older ones). The Windows bundle carries
-the native `sharp` binding via `npm run package:venue`.
+This supports sharing a kitchen printer with an existing AKINSOFT setup. It does **not** implement direct AKINSOFT/Wolvox data synchronisation; that would require an additional adapter matched to the venue's module and licence.
 
-## Testing on a phone
+## Local setup
 
-The dev server must be reachable at an address the phone can dial, and that
-address changes with every network. One command re-points it and prints the
-live scan URLs:
+Prerequisites: **Node.js 24**, npm, and **PostgreSQL 16+**. The optional [Docker Compose file](docker-compose.yml) runs PostgreSQL only; configure its database credentials to match your local environment.
 
 ```bash
-npm run dev:origin     # detect this machine's LAN IP, rewrite .env, list URLs
-npm run dev            # restart for the new origin to take effect
+git clone https://github.com/cypriotCodder/Restaurant_app.git
+cd Restaurant_app
+npm ci
+cp .env.example .env.local
+# Fill in the environment values below before continuing.
+npm run migrate:deploy
+npm run seed
+npm run dev
 ```
 
-Two things commonly stop a phone reaching it, neither of them app bugs:
+Set these values in the gitignored `.env.local`:
 
-- **Client isolation** on café, hotel and ISP guest networks blocks
-  device-to-device traffic entirely. Test with `http://<ip>:3000/api/health` —
-  plain JSON, no JavaScript. If that fails, the network is the problem. A
-  personal hotspot is the quickest way around it.
-- **`.local` hostnames** rely on mDNS. They resolve to loopback on the machine
-  itself, so a laptop test proves nothing about a phone.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string for the database you created. |
+| `AUTH_SECRET` | Staff-token secret, at least 32 characters; generate with `openssl rand -base64 32`. |
+| `CRON_SECRET` | Manual POS-sweep/diagnostic secret, at least 16 characters; generate with `openssl rand -base64 24`. |
+| `NEXT_PUBLIC_BASE_URL` | Browser-reachable origin; `http://localhost:3000` for same-machine development. |
+| `UPLOAD_DIR` | Writable photo directory; the example uses `./.uploads`. |
+| `TRUST_PROXY` | Keep `0` for direct access; use `1` only behind a correctly configured trusted proxy. |
 
-## Work log
+The Prisma configuration loads `.env.local`, so migrations use the same local database as the app. `npm ci` generates the Prisma client through the postinstall script.
 
-Each change to this project is recorded in **[WORKLOG.md](WORKLOG.md)** — what
-was asked, what changed, why the non-obvious calls were made that way, and the
-evidence that it works. Newest entry first.
+The seed creates a sample menu, eight tables, staff accounts, and a bridge key. Default staff emails are `admin@theheaven.local` and `desk@theheaven.local`, overridable with `SEED_ADMIN_EMAIL` and `SEED_DESK_EMAIL`. Set `SEED_ADMIN_PASSWORD` / `SEED_DESK_PASSWORD`, or capture the generated passwords printed once by the seed. Keep these credentials and the bridge key private.
 
-## Stack & notes
+For phone testing, run `npm run dev:origin`, then restart `npm run dev`; the helper updates the development origin and prints scan URLs. First check that the phone can reach `http://<server-ip>:3000/api/health`. Guest Wi-Fi client isolation can block access even when the app works on the server itself.
 
-Next.js App Router (TS) · Prisma 6 + **PostgreSQL** on the same machine · SSE for realtime over an **in-process event bus**, which is all a single server needs · menu photos on **local disk** (`UPLOAD_DIR`, served via `/api/media`) · POS sweep and data retention on an **in-process scheduler** · Tailwind. Runtime dependencies are Node, Postgres and nothing else. Multi-tenant: all data is venue-scoped. Money is stored as kuruş integers. Orders snapshot item names/prices. Payment is pay-at-till; `paymentStatus/Provider/Ref` fields are already on `Order` for a later PSP (iyzico/PayTR) integration.
+## Testing / CI
 
-**One process is assumed.** The event bus and the login rate limiter are in-memory, so running two app processes behind a load balancer would silently break live updates between them.
+```bash
+npx prisma validate
+npm run lint
+npm run typecheck
+npm test
+```
 
-`src/lib/env.ts` validates the environment at boot (via `src/instrumentation.ts`). There are no
-fallbacks: an install missing `AUTH_SECRET`, `DATABASE_URL`, `CRON_SECRET` or
-`NEXT_PUBLIC_BASE_URL` fails to start rather than coming up misconfigured. `UPLOAD_DIR`
-defaults to `/var/lib/masadan/uploads`. `TRUST_PROXY=1` tells the rate limiter a reverse
-proxy is appending the real client address to `X-Forwarded-For`; leave it unset when Node
-is reachable directly.
+[GitHub Actions CI](.github/workflows/ci.yml) runs on pull requests and pushes to `main`, using Node.js 24. It installs dependencies, validates the Prisma schema, runs ESLint and TypeScript checks, and executes the Vitest suite.
 
-## Release gate: NEXT_PUBLIC_BASE_URL
+The tests cover areas including QR/session validation, authentication and rate limits, order idempotency and edits, billing, POS delivery and bridge protocol handling, photo storage, caching, and reporting. The workflow does not build the production bundle or exercise a physical printer; verify those separately for a deployment.
 
-**Set `NEXT_PUBLIC_BASE_URL` to the final production domain before printing a single QR code.**
-Every physical table QR encodes `{NEXT_PUBLIC_BASE_URL}/scan/{code}?k={sig}`. If the domain changes
-afterwards, every printed code in the venue stops working and all table cards must be reprinted.
-Changing `AUTH_SECRET` is safe by comparison — it only signs out staff.
+## Deployment
+
+See [ONPREM_SETUP.md](ONPREM_SETUP.md) for installation, HTTPS, service configuration, bridge setup, backups, and health checks; [WALKTHROUGH.md](WALKTHROUGH.md) includes the Windows venue workflow.
+
+```bash
+npm run package        # Standalone server plus static assets and runtime files
+# Or, for the Windows venue target:
+npm run package:venue
+```
+
+The Windows packaging command selects the target Prisma engines and bundles the Windows `sharp` binding. Apply database migrations, configure the production environment, and run the packaged server as a supervised service with the bridge agent. Keep photo storage outside the application directory and back up both PostgreSQL and uploaded files.
+
+**Choose the final `NEXT_PUBLIC_BASE_URL` before printing table QR cards.** Changing the origin does not invalidate the HMAC signature, but existing cards still point to the old address and may need reprinting. Use a stable, reachable hostname and validate the complete scan → order → staff acceptance → print flow from a customer phone.
+
+The venue machine is a single point of failure. Offline ordering depends on the local server, network, and printer remaining available. See the installation guide for operational checks, and [WORKLOG.md](WORKLOG.md) for the existing engineering history.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Language | TypeScript; JavaScript for bridge and utility scripts |
+| Application | Next.js 16 App Router, React 19, Tailwind CSS 4, SWR |
+| Data | PostgreSQL, Prisma 6 |
+| Validation / authentication | Zod, jose, bcryptjs |
+| Live updates / hardware | SSE, Node.js events, ESC/POS over TCP, Windows USB print shim |
+| Images / QR | sharp, qrcode |
+| Quality / operations | Vitest, ESLint, TypeScript checks, GitHub Actions, standalone Node.js packaging |
