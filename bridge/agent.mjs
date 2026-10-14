@@ -68,7 +68,8 @@ function printRaw(bytes) {
       if (settled) return;
       settled = true;
       sock.destroy();
-      err ? reject(err) : resolve();
+      if (err) reject(err);
+      else resolve();
     };
     let reply = "";
     const sock = net.createConnection({ host: PRINTER_HOST, port: PRINTER_PORT }, () => {
