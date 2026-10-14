@@ -116,14 +116,20 @@ UPLOAD_DIR=/var/lib/masadan/uploads
 # Caddy (§2) is in front, so the client address it appends to
 # X-Forwarded-For is the one the login and scan rate limits key on.
 TRUST_PROXY=1
+
+# Loopback only: with TRUST_PROXY=1 nothing but Caddy may reach port 3000.
+HOSTNAME=127.0.0.1
 ```
 
 > `TRUST_PROXY=1` is only correct when **every** request reaches Node through
-> the proxy. Bind the app to `127.0.0.1` (`HOST=127.0.0.1` in the env file)
-> so a phone on the LAN cannot reach port 3000 directly and hand the limiter a
-> forged address. Caddy replaces any `X-Forwarded-For` a client sends unless
-> that client is listed in `trusted_proxies`, which is the behaviour relied on
-> here.
+> the proxy. `HOSTNAME=127.0.0.1` is what enforces that: it binds the app to
+> loopback, so a phone on the LAN cannot reach port 3000 directly and hand the
+> limiter a forged address. The variable is `HOSTNAME`, not `HOST` — the
+> standalone `server.js` reads only the former and listens on `0.0.0.0` when it
+> is unset, so a misspelt name leaves the port open with no error. The server
+> logs a warning at boot when `TRUST_PROXY=1` is set without a loopback bind.
+> Caddy replaces any `X-Forwarded-For` a client sends unless that client is
+> listed in `trusted_proxies`, which is the behaviour relied on here.
 
 ```bash
 sudo mkdir -p /var/lib/masadan/uploads

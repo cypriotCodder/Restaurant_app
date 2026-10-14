@@ -17,7 +17,8 @@ the Prisma CLI targets the same database the app does.
 
 The app is **self-hosted**: it runs as a single long-lived Node server on the venue's
 own machine, with Postgres beside it and no managed cloud services.
-To install it in a restaurant, see **[ONPREM_SETUP.md](ONPREM_SETUP.md)**.
+To install it in a restaurant, see **[ONPREM_SETUP.md](ONPREM_SETUP.md)** (Linux) or
+**[WINDOWS_SETUP.md](WINDOWS_SETUP.md)** (the Windows venue PC).
 
 ### Staff / Admin Credentials
 

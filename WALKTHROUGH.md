@@ -373,7 +373,8 @@ while the agent was down prints when it comes back.
 ## Before this becomes real service
 
 This walkthrough leaves the system in a state that works but will not survive a
-reboot or a customer. Still to do, from `ONPREM_SETUP.md`:
+reboot or a customer. **[WINDOWS_SETUP.md](WINDOWS_SETUP.md)** is the production
+install for this machine and covers each of these:
 
 - **HTTPS with a real hostname** (§2). Customer phones will not trust anything
   less, and `NEXT_PUBLIC_BASE_URL` must be that hostname *before* QR cards are
