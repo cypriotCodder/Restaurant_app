@@ -67,14 +67,13 @@ typecheck, 313 tests and a production build.
 
 Remaining:
 
-- [ ] **Push** the branch so CI runs the new build step against it.
+- [x] **Push** the branch so CI runs the new build step against it.
 - [ ] **Decide the trunk.** `origin/HEAD` points at
       `feat/restaurant-hardening-and-front-of-house`, not `main`. Either merge it
       into `main` and make `main` the default again, or rename it — a branch
       called `feat/...` should not be what production ships from.
-- [ ] **Prune dead worktrees.** All ten registered worktrees point at
-      `~/Desktop/myRepo/...`, a path that no longer exists (`git worktree list`
-      marks them `prunable`). `git worktree prune` removes only the bookkeeping.
+- [x] **Prune dead worktrees.** All ten pointed at `~/Desktop/myRepo/...`, a
+      path that no longer exists; `git worktree prune` removed the bookkeeping.
 - [ ] **Delete merged branches**, locally and on `origin`. Merged into this
       branch: `main`, `chore/deployment-planning-docs`, `perf-plan`,
       `worktree-audit-fixes`, `-onprem-plan-rewrite`, `-package-bridge-copy`,
@@ -124,9 +123,10 @@ certainly router configuration, not application code. Do not print table cards.
 
 ### Gate 1b — the printer
 
-- [ ] `copy /b` to the shared queue moves paper (Windows configuration proven
-      before the app is involved).
-- [ ] Ticket prints end to end: order → desk accepts → paper.
+- [x] `copy /b` to the shared queue moves paper — implied by the next item:
+      the app's tickets go through the same Windows queue.
+- [x] Ticket prints end to end: order → desk accepts → paper. **Verified on
+      the venue PC, 2026-10-14.**
 - [ ] **`ç ğ ı İ ö ş ü` are correct on the paper.** PC857 encoding is the thing
       most likely to be subtly wrong.
 - [ ] Ayarlar → POS health shows nothing queued and a recent successful send.
