@@ -31,7 +31,13 @@ print sheet, order log with cursor pagination, admin reporting, POS outbox with
 retry and a boot sweep, `/api/health` covering database *and* scheduler
 liveness, zod-validated env that fails the boot rather than starting broken,
 constant-time comparison on QR and bridge-key verification, security headers,
-222 Vitest tests, and green CI.
+313 Vitest tests, and green CI (lint, typecheck, test, production build).
+
+**Written but not yet run on the venue machine:** `WINDOWS_SETUP.md` (the
+production install — NSSM services, Caddy, Task Scheduler), `scripts/backup.ps1`
+(nightly `pg_dump` + `UPLOAD_DIR`, 30-day retention, `-MirrorTo` a second disk)
+and `scripts/watchdog.ps1` (restarts the service after repeated `/api/health`
+failures). Phase 2 is now mostly *executing and proving* these, not writing them.
 
 **The one thing that matters more than all of it:**
 
@@ -49,6 +55,45 @@ constant-time comparison on QR and bridge-key verification, security headers,
 >
 > Scanning a QR code is the product's entire premise. Until this is
 > demonstrated, everything else is unproven infrastructure.
+
+---
+
+## Phase 0 — Housekeeping (dev machine, before the trip)
+
+Small, and none of it touches application behaviour. Done 2026-10-14: pending
+ops work committed, `bridge/agent.mjs` lint warning fixed, same-major dependency
+bumps (Next 16.4.0, React 19.3.0, zod, jose, Tailwind) verified with lint,
+typecheck, 313 tests and a production build.
+
+Remaining:
+
+- [ ] **Push** the branch so CI runs the new build step against it.
+- [ ] **Decide the trunk.** `origin/HEAD` points at
+      `feat/restaurant-hardening-and-front-of-house`, not `main`. Either merge it
+      into `main` and make `main` the default again, or rename it — a branch
+      called `feat/...` should not be what production ships from.
+- [ ] **Prune dead worktrees.** All ten registered worktrees point at
+      `~/Desktop/myRepo/...`, a path that no longer exists (`git worktree list`
+      marks them `prunable`). `git worktree prune` removes only the bookkeeping.
+- [ ] **Delete merged branches**, locally and on `origin`. Merged into this
+      branch: `main`, `chore/deployment-planning-docs`, `perf-plan`,
+      `worktree-audit-fixes`, `-onprem-plan-rewrite`, `-package-bridge-copy`,
+      `-perf-work-order`, `-prune-engines`, `-remote-update-tooling`,
+      `-table-button-hover`, `-venue-windows-walkthrough`.
+      **Not merged — review before deleting:** `worktree-ui-perf-fixes`,
+      `worktree-walkthrough-fixes`.
+- [ ] **`.env.bak-1785663660`** holds a `DATABASE_URL` that `.env` no longer
+      has (the old Neon one). Confirm it is dead, then delete the file. It is
+      git-ignored, so this is only about not leaving a credential on disk.
+- [ ] **`npm audit`: 5 high**, all `micromatch` via `eslint-config-next` —
+      lint-time only, not in the shipped bundle. Re-check when the next
+      `eslint-config-next` lands; do not `audit fix --force` (it downgrades).
+- [ ] **Run `npm run package:venue`** on the bumped dependencies and keep that
+      bundle as the one carried to the venue.
+
+Held on purpose until after the first venue: Prisma 7, TypeScript 7, ESLint 10,
+Vitest 5, `@types/node` past 20. Each is a major with migration work; none fixes
+anything the venue needs.
 
 ---
 
@@ -128,8 +173,8 @@ Strictly in this order:
 The walkthrough leaves three processes in three terminal windows. That is fine
 for a test and unacceptable for service.
 
-- [ ] App, shim, and agent all run as Windows services (NSSM or WinSW), set to
-      start automatically.
+- [ ] App, shim, and agent all run as Windows services, set to start
+      automatically — NSSM commands are in `WINDOWS_SETUP.md` §5–6.
 - [ ] **Verify printing still works once they are services.** A service running
       as LocalSystem lives in session 0 and generally cannot resolve a per-user
       printer connection like `\\localhost\KITCHEN`. Either run the shim service
@@ -140,19 +185,20 @@ for a test and unacceptable for service.
 
 ### 2c. Backups
 
-Nothing does this for you (`ONPREM_SETUP.md` §7).
+Nothing does this for you. `scripts/backup.ps1` does the work; scheduling it
+is `WINDOWS_SETUP.md` §8.
 
-- [ ] Daily `pg_dump`, 30-day retention.
-- [ ] `UPLOAD_DIR` copied alongside it — the database alone does not contain the
-      menu photos.
-- [ ] Backup target on a **different physical disk**, copied off-site.
+- [ ] Task Scheduler runs `backup.ps1` nightly (dump + `UPLOAD_DIR`, 30 days).
+- [ ] `-MirrorTo` set to a **different physical disk**; something copies it
+      off-site.
 - [ ] **Restore-test once**, before it is needed. An untested backup is a guess.
 
 ### 2d. Operational readiness
 
 - [ ] Admin password rotated off the seeded one and recorded somewhere the owner
       can actually find it.
-- [ ] `/api/health` polled by something that restarts the app on failure.
+- [ ] `scripts/watchdog.ps1` scheduled every minute (`WINDOWS_SETUP.md` §9),
+      and seen to restart the service once by stopping the database.
       `Restart=always` equivalents catch a crash; they cannot see a process that
       is up but broken, which is the failure that ends with the kitchen not
       printing and nobody knowing.
