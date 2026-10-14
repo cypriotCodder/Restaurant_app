@@ -122,7 +122,7 @@ The tests cover areas including QR/session validation, authentication and rate l
 
 ## Deployment
 
-See [ONPREM_SETUP.md](ONPREM_SETUP.md) for installation, HTTPS, service configuration, bridge setup, backups, and health checks; [WALKTHROUGH.md](WALKTHROUGH.md) includes the Windows venue workflow.
+See [ONPREM_SETUP.md](ONPREM_SETUP.md) (Linux) or [WINDOWS_SETUP.md](WINDOWS_SETUP.md) (the Windows venue PC) for installation, HTTPS, service configuration, bridge setup, backups, and health checks; [WALKTHROUGH.md](WALKTHROUGH.md) includes the Windows venue workflow.
 
 ```bash
 npm run package        # Standalone server plus static assets and runtime files

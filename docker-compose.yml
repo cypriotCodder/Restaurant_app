@@ -9,7 +9,8 @@ services:
       POSTGRES_PASSWORD: choose-a-password
       POSTGRES_DB: masadan
     ports:
-      - '5432:5432'
+      # Loopback only: the database is never reached from another machine.
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
 
