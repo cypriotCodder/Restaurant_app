@@ -68,7 +68,7 @@ typecheck, 313 tests and a production build.
 Remaining:
 
 - [x] **Push** the branch so CI runs the new build step against it.
-- [x] **Decide the trunk: `main`.** Fast-forwarded to the feature branch and
+- [x] **Decide the trunk: `main`.** Feature branch merged in (bfd61d6) and
       made the GitHub default; production ships from `main`.
 - [x] **Prune dead worktrees.** All ten pointed at `~/Desktop/myRepo/...`, a
       path that no longer exists; `git worktree prune` removed the bookkeeping.
