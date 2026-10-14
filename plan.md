@@ -68,10 +68,8 @@ typecheck, 313 tests and a production build.
 Remaining:
 
 - [x] **Push** the branch so CI runs the new build step against it.
-- [ ] **Decide the trunk.** `origin/HEAD` points at
-      `feat/restaurant-hardening-and-front-of-house`, not `main`. Either merge it
-      into `main` and make `main` the default again, or rename it — a branch
-      called `feat/...` should not be what production ships from.
+- [x] **Decide the trunk: `main`.** Fast-forwarded to the feature branch and
+      made the GitHub default; production ships from `main`.
 - [x] **Prune dead worktrees.** All ten pointed at `~/Desktop/myRepo/...`, a
       path that no longer exists; `git worktree prune` removed the bookkeeping.
 - [ ] **Delete merged branches**, locally and on `origin`. Merged into this
@@ -127,7 +125,7 @@ certainly router configuration, not application code. Do not print table cards.
       the app's tickets go through the same Windows queue.
 - [x] Ticket prints end to end: order → desk accepts → paper. **Verified on
       the venue PC, 2026-10-14.**
-- [ ] **`ç ğ ı İ ö ş ü` are correct on the paper.** PC857 encoding is the thing
+- [x] **`ç ğ ı İ ö ş ü` are correct on the paper** (verified 2026-10-14). PC857 encoding is the thing
       most likely to be subtly wrong.
 - [ ] Ayarlar → POS health shows nothing queued and a recent successful send.
 
