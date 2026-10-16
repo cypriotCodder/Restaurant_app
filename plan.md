@@ -1,4 +1,4 @@
-# Plan — Masadan Sipariş, on-prem
+# Plan — Masadan Sipariş, cloud server + venue bridge
 
 **Status: pre-first-venue.** The app is feature-complete for a single venue and
 has never served a real customer.
@@ -11,19 +11,21 @@ for what happened and why, so the change of direction is not mistaken for drift.
 
 ## Where the app actually is
 
-**Architecture** (`ONPREM_SETUP.md` is the authority):
+**Architecture** — as built for on-prem; from 2026-10-16 the same process runs
+on a VPS and only the bridge stays at the venue (Phase 2). `ONPREM_SETUP.md`
+remains the install authority:
 
 | | |
 |---|---|
-| Host | one Node process on the venue's own machine |
-| Database | local Postgres, one direct connection |
+| Host | one Node process on a VPS (was: the venue's own machine) |
+| Database | Postgres beside it on the same host, one direct connection |
 | Event bus | in-process `EventEmitter` (`src/lib/bus.ts`) |
 | Menu photos | `UPLOAD_DIR` on disk, served via `/api/media` |
 | POS sweep + retention | in-process scheduler (`src/lib/scheduler.ts`) |
 | Rate limiting | in-process fixed windows |
 | Printing | ESC/POS over TCP via `bridge/agent.mjs` |
 
-There are no managed services. There is nothing to provision.
+There are no managed services beyond the VPS itself.
 
 **Done and holding:** the full order loop (scan → order → desk → accept →
 ticket), bill and close-table, staff account management, venue settings, QR
@@ -33,11 +35,11 @@ liveness, zod-validated env that fails the boot rather than starting broken,
 constant-time comparison on QR and bridge-key verification, security headers,
 313 Vitest tests, and green CI (lint, typecheck, test, production build).
 
-**Written but not yet run on the venue machine:** `WINDOWS_SETUP.md` (the
-production install — NSSM services, Caddy, Task Scheduler), `scripts/backup.ps1`
-(nightly `pg_dump` + `UPLOAD_DIR`, 30-day retention, `-MirrorTo` a second disk)
-and `scripts/watchdog.ps1` (restarts the service after repeated `/api/health`
-failures). Phase 2 is now mostly *executing and proving* these, not writing them.
+**Windows server tooling, now mostly unused:** `WINDOWS_SETUP.md`,
+`scripts/backup.ps1` and `scripts/watchdog.ps1` were written for running the
+server on the venue PC. With the server on a VPS (Phase 2), only the bridge
+parts of `WINDOWS_SETUP.md` (§6, NSSM services for agent and shim) still apply;
+keep the rest as the fallback if the venue ever has to go offline-first again.
 
 **The one thing that matters more than all of it:**
 
@@ -94,30 +96,11 @@ anything the venue needs.
 
 ---
 
-## Phase 1 — The venue trip
+## Phase 1 — The printer at the venue ✅
 
-**Goal: one real order, from a real phone, printed on real paper.**
-
-Follow `WALKTHROUGH.md` for the setup. The venue machine is Windows with a USB
-printer, so it needs `bridge/win-usb-print.mjs` alongside the agent, and the
-Prisma bundle must carry the Windows engine.
-
-These are one trip, not two: both the phone test and the printer test require
-the venue's own network and hardware.
-
-### Gate 1a — the phone reaches the server
-
-Before anything else, on the venue wifi:
-
-- [ ] Read the **phone's IP address** and confirm it is on the machine's subnet.
-      This single fact settles the open question in the worklog.
-- [ ] Phone loads `http://<machine>:3000/api/health` → `{"status":"ok"}`.
-- [ ] Confirm wireless-to-wireless traffic is permitted. Guest networks commonly
-      isolate clients, which would stop **every customer phone** while the
-      machine itself looks perfectly healthy.
-
-**If this fails, stop.** Nothing downstream can work and the cause is almost
-certainly router configuration, not application code. Do not print table cards.
+Done on the venue PC, 2026-10-14. (Gate 1a — a phone reaching a server on the
+venue LAN — is moot now that the server is in the cloud; phones reach it like
+any website. Its wifi-isolation question no longer blocks anything.)
 
 ### Gate 1b — the printer
 
@@ -129,84 +112,121 @@ certainly router configuration, not application code. Do not print table cards.
       most likely to be subtly wrong.
 - [ ] Ayarlar → POS health shows nothing queued and a recent successful send.
 
-### Gate 1c — the whole loop, for real
-
-- [ ] A **real phone** scans a printed or on-screen QR, orders, and the kitchen
-      prints it. Not a dev scan link on the terminal.
-- [ ] **Pull the WAN cable and repeat.** Ordering and printing must still work.
-      This is the entire justification for running on-prem; if it fails, the
-      architecture is not earning its cost.
-
-**Exit criteria:** all three gates pass on the venue's own network and hardware.
+Gate 1c (the full order flow) is now step 3a, run against the cloud server.
 
 ---
 
-## Phase 2 — Before a paying customer uses it
+## Phase 2 — Cloud server
 
-Phase 1 proves it works. This phase makes it survivable.
+**Decision (2026-10-16): the app moves to a small VPS; only the bridge and the
+printer stay at the venue.** See [History](#history). Nothing in the code
+changes: the bridge already polls `/api/bridge/pending` and acks over HTTP with
+`BASE_URL` + `BRIDGE_KEY`, and the single-process design (in-memory bus,
+scheduler, rate limits) fits one VPS exactly as it fitted one PC.
 
-### 2a. Hostname and HTTPS — a hard gate, and the order matters
+`ONPREM_SETUP.md` (Linux) is the install guide for the server, with the
+differences below.
 
-`NEXT_PUBLIC_BASE_URL` is baked into every printed QR. Getting it wrong costs a
-reprint of every table card, because the signature covers `tableCode:qrVersion`
-only — the cards stay cryptographically valid while pointing at an address that
-no longer answers.
+### 2a. Provision — decisions first
 
-Strictly in this order:
+- [ ] **Provider and region.** Hetzner CX22 (2 vCPU / 4 GB, ~€4–5/mo) or
+      equivalent, in the region with the lowest latency to the venue
+      (Falkenstein/Nuremberg/Helsinki from Turkey/Cyprus; measure with `ping`).
+- [ ] Enable the provider's **automatic snapshots/backups** (~20% of the price).
+      This is the floor, not the backup plan — see 2e.
+- [ ] Ubuntu 24.04 LTS. SSH key only, password login off, `ufw` allowing
+      22, 80, 443 and nothing else. `unattended-upgrades` on, with automatic
+      reboot at **04:00 local** — outside service hours.
+- [ ] **Domain** under your control (`masa.<venue>.com`), A record → the VPS's
+      public IP. A public IP means plain HTTP-01 certificates: no DNS plugin,
+      no API token, no rebind problems.
 
-1. [ ] Decide the final hostname. A **stable DNS name**, never a bare IP — an
-       address that follows the machine is what saves you reprinting when the
-       network hands out a different lease.
-2. [ ] Static LAN IP for the machine (DHCP reservation is fine).
-3. [ ] Certificate via DNS-01, terminated in Caddy or nginx (`ONPREM_SETUP.md`
-       §2). Self-signed will not do — customers meet this once, through a
-       browser warning, and leave.
-4. [ ] `NEXT_PUBLIC_BASE_URL` set to that origin, app restarted.
-5. [ ] **Only now**, print table cards. `QrSheet.tsx` refuses to print on a
-       localhost address, which protects against the worst version of this
-       mistake but not against a wrong-but-plausible one.
+### 2b. Install the app (`ONPREM_SETUP.md` §1–5)
 
-### 2b. Survive a reboot
+- [ ] Postgres 16 on the VPS, listening on localhost only.
+- [ ] Caddy with the stock binary and a two-line site block
+      (`reverse_proxy 127.0.0.1:3000`); certificate issues itself.
+- [ ] Env as in §3, with `NEXT_PUBLIC_BASE_URL=https://masa.<venue>.com`,
+      `HOSTNAME=127.0.0.1`, `TRUST_PROXY=1`. Secrets generated on the server.
+- [ ] Build target is **Linux** now: `npm run package` (not `package:venue`,
+      which prunes to the Windows engine and bundles win32 `sharp`).
+- [ ] systemd unit with `Restart=always`; `[scheduler] started` in the journal,
+      no `[env]` warning.
+- [ ] Seed, change the admin password, recreate the menu and tables.
 
-The walkthrough leaves three processes in three terminal windows. That is fine
-for a test and unacceptable for service.
+**Check:** `https://masa.<venue>.com/api/health` → `{"status":"ok"}` from a
+phone **on 4G**, with no certificate warning. Desk board updates live through
+Caddy.
 
-- [ ] App, shim, and agent all run as Windows services, set to start
-      automatically — NSSM commands are in `WINDOWS_SETUP.md` §5–6.
-- [ ] **Verify printing still works once they are services.** A service running
-      as LocalSystem lives in session 0 and generally cannot resolve a per-user
-      printer connection like `\\localhost\KITCHEN`. Either run the shim service
-      as the logged-in user, or change the shim to call the Win32 `WritePrinter`
-      API against the local printer name — which works in a service context and
-      removes the sharing step entirely.
-- [ ] Reboot the machine and confirm the full loop still works untouched.
+### 2c. Point the venue's bridge at the cloud
 
-### 2c. Backups
+The venue PC keeps only `bridge/agent.mjs` and `bridge/win-usb-print.mjs` —
+no Node server, no Postgres, no Caddy at the venue.
 
-Nothing does this for you. `scripts/backup.ps1` does the work; scheduling it
-is `WINDOWS_SETUP.md` §8.
+- [ ] Agent env: `BASE_URL=https://masa.<venue>.com`, a **new** `BRIDGE_KEY`
+      (the one on the old local install never leaves that machine), printer
+      settings unchanged.
+- [ ] `DRY_RUN=1` first; then a real ticket with `ç ğ ı İ ö ş ü`.
+- [ ] Agent and shim as Windows services (NSSM, `WINDOWS_SETUP.md` §6), and
+      **re-test printing once they are services** (session-0 printer access).
+- [ ] Reboot the venue PC, touch nothing, order from a phone: it prints.
+- [ ] Retire the local server, Postgres and Caddy from the venue PC once the
+      cloud path has printed for real.
 
-- [ ] Task Scheduler runs `backup.ps1` nightly (dump + `UPLOAD_DIR`, 30 days).
-- [ ] `-MirrorTo` set to a **different physical disk**; something copies it
-      off-site.
-- [ ] **Restore-test once**, before it is needed. An untested backup is a guess.
+### 2d. The outage test — what the trade actually costs
 
-### 2d. Operational readiness
+With the app in the cloud, a venue internet outage stops tickets, not orders:
+phones on 4G keep ordering, the outbox holds the tickets, the bridge prints them
+when the line returns.
 
-- [ ] Admin password rotated off the seeded one and recorded somewhere the owner
-      can actually find it.
-- [ ] `scripts/watchdog.ps1` scheduled every minute (`WINDOWS_SETUP.md` §9),
-      and seen to restart the service once by stopping the database.
-      `Restart=always` equivalents catch a crash; they cannot see a process that
-      is up but broken, which is the failure that ends with the kitchen not
-      printing and nobody knowing.
-- [ ] Staff shown the desk board, the accept/reject flow, and what to do when
-      the printer jams.
+- [ ] **Pull the venue's WAN cable** for two minutes. Order from a 4G phone.
+      Plug back in: the ticket prints, once, without staff action.
+- [ ] Ayarlar → POS health showed it queued during the outage.
+- [ ] **4G failover router** (~€30–60 + a data SIM) between the venue PC and
+      the internet, so the bridge rides through outages unattended. Repeat the
+      cable test with failover in place: the ticket prints *during* the outage.
+- [ ] Staff know the fallback: if the desk is unreachable, take orders on paper.
+
+### 2e. Backups and monitoring
+
+- [ ] Nightly `pg_dump` + `UPLOAD_DIR` (`ONPREM_SETUP.md` §7), 30 days, and
+      **copied off the VPS** (object storage or your own machine) — a snapshot
+      of the same provider is not an independent copy.
+- [ ] **Restore-test once** onto a throwaway VPS.
+- [ ] External uptime monitor (UptimeRobot or similar, free) on `/api/health`,
+      alerting *you*. Something must also restart the service when health fails
+      while the process is up (`ONPREM_SETUP.md` §8 Monitoring timer).
+- [ ] Alert on the bridge too: POS health showing a queue older than a few
+      minutes means the venue side is down.
+
+---
+
+## Phase 3 — Before a paying customer uses it
+
+### 3a. Table cards — only after Phase 2 holds
+
+`NEXT_PUBLIC_BASE_URL` is in every printed QR (`src/lib/qr.ts`), and the
+signature covers `tableCode:qrVersion` only, so a card with a wrong address
+still verifies and points nowhere. A name, never an IP, is what lets the server
+move later (new VPS, new provider) without reprinting: change the A record.
+
+- [ ] Admin → QR sheet shows `https://masa.<venue>.com`.
+- [ ] Print **one** card; scan it with an iPhone and an Android, on 4G *and* on
+      the venue wifi, order through to paper.
+- [ ] Then print the set. No wifi details needed on the card.
+
+### 3b. Operational readiness
+
+- [ ] Admin password recorded where the owner can find it.
+- [ ] Staff shown the desk board, accept/reject, the printer-jam routine and the
+      paper fallback.
 - [ ] A rehearsal shift: real orders, staff operating it, you present.
 
+**Running cost:** VPS ~€5 + snapshots ~€1 + domain ~€1 + data SIM, per month.
+
 ---
 
-## Phase 3 — Deferred on purpose
+## Phase 4 — Deferred on purpose
 
 Not "later" in the sense of forgotten. Each of these has a reason to wait and a
 condition that would change the answer.
@@ -238,19 +258,20 @@ category anchors (`#cat-<id>`) would break. See `docs/archive/work_order.md`.
 
 ## Definition of done — "live with real customers"
 
-- [ ] A phone on the venue wifi completes a full order, verified on the venue's
-      own network (closes the open worklog risk).
-- [ ] The kitchen prints it, with Turkish characters intact.
-- [ ] Both still work with the internet disconnected.
-- [ ] The venue is reachable over HTTPS at a stable hostname, and table cards
-      were printed only after that hostname was final.
-- [ ] All three processes survive a reboot, and printing still works as
-      services.
-- [ ] A backup has been taken *and* restored.
+- [x] The kitchen prints, with Turkish characters intact (2026-10-14).
+- [ ] The app answers at `https://masa.<venue>.com` from a phone on 4G and on
+      the venue wifi.
+- [ ] The venue bridge prints tickets from the cloud server, as services, and
+      survives a reboot of the venue PC.
+- [ ] A WAN outage queues tickets and prints them on reconnect; with the 4G
+      failover, prints straight through.
+- [ ] Table cards printed only after the hostname was final.
+- [ ] A backup copied off the VPS *and* restored.
+- [ ] Uptime alerts reach you, not the owner.
 - [ ] Staff have run a rehearsal shift.
 
 Nothing here is checked by writing code. Every item is a thing that has to be
-observed working on the venue's hardware.
+observed working.
 
 ---
 
@@ -275,3 +296,14 @@ With that reversal the managed-services half of the plan became not merely
 obsolete but misleading — it described an architecture the repository no longer
 has, and none of those dependencies remain in `package.json`. Hence this
 rewrite.
+
+**Second reversal, 2026-10-16: on-prem → a VPS plus a venue bridge.** On-prem
+bought offline ordering at the cost of running a Windows PC in a restaurant
+remotely — power cuts, forced updates, disk failure, certificates, backups, all
+fixed on site. A €5 VPS moves the server into a data centre and keeps the parts
+that made on-prem right: still one long-lived process (so no 300-second SSE
+teardown and no external bus, unlike the Vercel plan), and the printer still
+local behind the bridge. The cost moves to the venue's internet: an outage
+pauses tickets (the outbox queues them) while 4G phones keep ordering, and a
+4G-failover router closes most of that gap. Side benefits: ordinary HTTP-01
+certificates, no DNS-rebind workarounds, and cards that work on mobile data.
